@@ -9,6 +9,7 @@ import {
   memStore,
   getDatabaseStatus,
   dbFindUserByEmail,
+  dbFindUserByPhone,
   dbFindUserById,
   dbSaveUser,
   dbUpdateUserStatus,
@@ -336,16 +337,51 @@ apiRouter.post('/auth/register', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
     if (!name || !email || !phone) {
-      return res.status(400).json({ error: 'جميع الحقول مطلوبة: الاسم، البريد الإلكتروني، ورقم الهاتف' });
+      return res.status(400).json({
+        success: false,
+        error: 'جميع الحقول مطلوبة: الاسم، البريد الإلكتروني، ورقم الهاتف'
+      });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = (email || '').toLowerCase().trim();
+    const cleanPhone = (phone || '').trim();
 
-    // Check if email already exists in database
-    const existing = await dbFindUserByEmail(normalizedEmail);
-    if (existing) {
-      return res.status(400).json({
-        error: 'البريد الإلكتروني مسجل بالفعل. يرجى تسجيل الدخول أو استخدام بريد إلكتروني آخر.'
+    // 1. Query database for existing email and phone
+    const existingEmail = await dbFindUserByEmail(normalizedEmail);
+    const existingPhone = await dbFindUserByPhone(cleanPhone);
+
+    // 2. Case A: Both email and phone exist and belong to the same customer
+    if (existingEmail && existingPhone && existingEmail.id === existingPhone.id) {
+      return res.status(409).json({
+        success: false,
+        error: 'لديك حساب مسجل بالفعل، سيتم تحويلك إلى تسجيل الدخول.',
+        message: 'لديك حساب مسجل بالفعل، سيتم تحويلك إلى تسجيل الدخول.',
+        code: 'ACCOUNT_EXISTS',
+        email: existingEmail.email,
+        redirectToLogin: true
+      });
+    }
+
+    // 3. Case B: Email is already registered
+    if (existingEmail) {
+      return res.status(409).json({
+        success: false,
+        error: 'هذا البريد الإلكتروني مسجل بالفعل، يرجى تسجيل الدخول.',
+        message: 'هذا البريد الإلكتروني مسجل بالفعل، يرجى تسجيل الدخول.',
+        code: 'EMAIL_EXISTS',
+        email: existingEmail.email,
+        redirectToLogin: true
+      });
+    }
+
+    // 4. Case C: Phone is already registered for another account
+    if (existingPhone) {
+      return res.status(409).json({
+        success: false,
+        error: 'رقم الهاتف مسجل بالفعل.',
+        message: 'رقم الهاتف مسجل بالفعل.',
+        code: 'PHONE_EXISTS',
+        redirectToLogin: false
       });
     }
 
@@ -358,7 +394,7 @@ apiRouter.post('/auth/register', async (req, res) => {
       name: name.trim(),
       email: normalizedEmail,
       password: passwordHash,
-      phone: phone.trim(),
+      phone: cleanPhone,
       role: 'CUSTOMER' as const,
       permissions: [],
       isActive: true,
@@ -366,7 +402,20 @@ apiRouter.post('/auth/register', async (req, res) => {
     };
 
     // Persist user to PostgreSQL database
-    await dbSaveUser(newUser);
+    try {
+      await dbSaveUser(newUser);
+    } catch (dbErr: any) {
+      if (dbErr.code === '23505' || dbErr.message?.includes('duplicate key') || dbErr.message?.includes('unique')) {
+        return res.status(409).json({
+          success: false,
+          error: 'هذا البريد الإلكتروني مسجل بالفعل، يرجى تسجيل الدخول.',
+          message: 'هذا البريد الإلكتروني مسجل بالفعل، يرجى تسجيل الدخول.',
+          code: 'EMAIL_EXISTS',
+          redirectToLogin: true
+        });
+      }
+      throw dbErr;
+    }
 
     // Update in-memory session cache
     memStore.users.push(newUser);
@@ -379,13 +428,18 @@ apiRouter.post('/auth/register', async (req, res) => {
 
     // Return user without password
     const { password: _, ...userSafe } = newUser;
-    res.status(201).json({ user: userSafe, token, success: true });
+    res.status(201).json({
+      success: true,
+      message: 'تم إنشاء الحساب بنجاح',
+      user: userSafe,
+      token
+    });
   } catch (err: any) {
     console.error('[Register API Error]', err);
     const errorMsg = typeof err?.message === 'string' && err.message !== '[object Object]'
       ? err.message
       : 'فشل إنشاء الحساب، يرجى التحقق من صحة البيانات';
-    res.status(500).json({ error: errorMsg });
+    res.status(500).json({ success: false, error: errorMsg });
   }
 });
 
@@ -655,7 +709,7 @@ apiRouter.post('/bookings', async (req, res) => {
   const bookingData = req.body;
 
   if (!bookingData.eventDate || !bookingData.timeSlot || !bookingData.customerName || !bookingData.customerPhone) {
-    return res.status(400).json({ error: 'جميع بيانات المناسبة والعميل مطلوبة' });
+    return res.status(400).json({ success: false, error: 'جميع بيانات المناسبة والعميل مطلوبة' });
   }
 
   // Conflict check for confirmed bookings
@@ -667,9 +721,49 @@ apiRouter.post('/bookings', async (req, res) => {
 
   if (conflict) {
     return res.status(409).json({
+      success: false,
       error: 'عذراً، هذا الموعد محجوز مسبقاً بشكل مؤكد. يرجى اختيار تاريخ أو فترة أخرى.',
       conflictingBookingId: conflict.id
     });
+  }
+
+  // Ensure customer is registered in PostgreSQL database and resolve authoritative customerId
+  let customerId: string;
+  let customerEmail = (bookingData.customerEmail || '').toLowerCase().trim();
+
+  if (user && user.id) {
+    customerId = user.id;
+    if (!customerEmail) customerEmail = (user.email || '').toLowerCase().trim();
+  } else {
+    // Check if customer already exists in DB by email or phone
+    let existingUser = customerEmail ? await dbFindUserByEmail(customerEmail) : null;
+    if (!existingUser && bookingData.customerPhone) {
+      existingUser = await dbFindUserByPhone(bookingData.customerPhone);
+    }
+
+    if (existingUser) {
+      customerId = existingUser.id;
+      if (!customerEmail) customerEmail = existingUser.email;
+    } else {
+      // Auto-register customer record in PostgreSQL so booking is strictly linked to a real customer
+      const newCustId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const autoEmail = customerEmail || `customer_${Date.now()}@dhuraydan.com`;
+      const newCust = {
+        id: newCustId,
+        name: bookingData.customerName.trim(),
+        email: autoEmail,
+        phone: bookingData.customerPhone.trim(),
+        password: hashPassword('user123456'),
+        role: 'CUSTOMER' as const,
+        permissions: [],
+        isActive: true,
+        createdAt: new Date().toISOString()
+      };
+      await dbSaveUser(newCust);
+      memStore.users.push(newCust);
+      customerId = newCustId;
+      if (!customerEmail) customerEmail = autoEmail;
+    }
   }
 
   const count = memStore.bookings.length + 101;
@@ -677,8 +771,9 @@ apiRouter.post('/bookings', async (req, res) => {
     ...bookingData,
     id: `bkg_${Date.now()}`,
     bookingCode: `RDN-2026-${count}`,
-    userId: user?.id || `usr_guest_${Date.now()}`,
-    customerId: user?.id || `usr_guest_${Date.now()}`,
+    userId: customerId,
+    customerId: customerId,
+    customerEmail,
     status: 'pending',
     createdAt: new Date().toISOString()
   };
@@ -700,7 +795,12 @@ apiRouter.post('/bookings', async (req, res) => {
   memStore.notifications.unshift(notif);
   await dbSaveNotification(notif);
 
-  res.status(201).json(newBooking);
+  res.status(201).json({
+    success: true,
+    message: 'تم تسجيل حجزك بنجاح.',
+    ...newBooking,
+    booking: newBooking
+  });
 });
 
 // Notifications

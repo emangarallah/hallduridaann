@@ -225,6 +225,8 @@ export async function initPgTables() {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users (LOWER(email));
+
       CREATE TABLE IF NOT EXISTS hall_settings (
         id VARCHAR(32) PRIMARY KEY DEFAULT 'primary',
         data JSONB NOT NULL,
@@ -641,6 +643,50 @@ export async function dbFindUserByEmail(email: string): Promise<any | null> {
 
   // Fallback to in-memory store
   return memStore.users.find(u => u.email.toLowerCase() === normalized) || null;
+}
+
+export async function dbFindUserByPhone(phone: string): Promise<any | null> {
+  const raw = (phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (!raw && !digits) return null;
+
+  await ensureDbReady();
+  if (pgPool && isPgConnected) {
+    try {
+      const res = await pgPool.query(
+        `SELECT * FROM users
+         WHERE phone = $1
+            OR REPLACE(REPLACE(phone, ' ', ''), '-', '') = $2
+            OR (LENGTH($3) >= 7 AND RIGHT(REPLACE(REPLACE(phone, ' ', ''), '-', ''), 7) = RIGHT($3, 7))
+         LIMIT 1`,
+        [raw, raw.replace(/[\s-]/g, ''), digits]
+      );
+      if (res.rows.length > 0) {
+        const r = res.rows[0];
+        return {
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          phone: r.phone,
+          password: r.password_hash,
+          role: r.role,
+          permissions: r.permissions || [],
+          avatarUrl: r.avatar_url,
+          isActive: r.is_active,
+          createdAt: r.created_at?.toISOString() || new Date().toISOString()
+        };
+      }
+    } catch (e: any) {
+      console.warn('[DB Error] dbFindUserByPhone query failed:', e.message);
+    }
+  }
+
+  return (
+    memStore.users.find(u => {
+      const uDigits = (u.phone || '').replace(/\D/g, '');
+      return u.phone === raw || (digits.length >= 7 && uDigits.endsWith(digits.slice(-7)));
+    }) || null
+  );
 }
 
 export async function dbFindUserById(id: string): Promise<any | null> {

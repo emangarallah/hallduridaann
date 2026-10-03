@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Lock, Mail, User as UserIcon, Phone, Sparkles, AlertCircle, CheckCircle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useRegisterCustomerMutation, useLoginCustomerMutation } from '../../hooks/useCustomerBookingQuery';
 import { User } from '../../types';
 import { formatErrorMessage } from '../../utils/apiConfig';
 
@@ -9,19 +11,27 @@ interface AuthModalProps {
   onClose: () => void;
   onSuccess?: (user: User) => void;
   onOpenAdminLogin?: () => void;
+  initialTab?: 'login' | 'register';
+  initialEmail?: string;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  onOpenAdminLogin
+  onOpenAdminLogin,
+  initialTab = 'login',
+  initialEmail = ''
 }) => {
-  const { login, register } = useAuth();
-  const [tab, setTab] = useState<'login' | 'register' | 'forgot'>('login');
+  const { setAuthUser } = useAuth();
+  const { showSuccess, showError, showInfo } = useToast();
+  const registerMutation = useRegisterCustomerMutation();
+  const loginMutation = useLoginCustomerMutation();
+
+  const [tab, setTab] = useState<'login' | 'register' | 'forgot'>(initialTab);
   
   // Login fields
-  const [loginEmail, setLoginEmail] = useState('');
+  const [loginEmail, setLoginEmail] = useState(initialEmail);
   const [loginPass, setLoginPass] = useState('');
 
   // Register fields
@@ -36,32 +46,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [forgotSent, setForgotSent] = useState(false);
 
   const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (initialTab) setTab(initialTab);
+      if (initialEmail) setLoginEmail(initialEmail);
+      setError('');
+    }
+  }, [isOpen, initialTab, initialEmail]);
 
   if (!isOpen) return null;
+
+  const isSubmitting = registerMutation.isPending || loginMutation.isPending;
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setIsLoading(true);
+
     try {
-      if (!loginEmail || !loginPass) {
+      if (!loginEmail.trim() || !loginPass) {
         throw new Error('يرجى إدخال البريد الإلكتروني وكلمة المرور');
       }
-      const authenticatedUser = await login(loginEmail, loginPass);
+
+      const data = await loginMutation.mutateAsync({
+        email: loginEmail.trim(),
+        password: loginPass
+      });
+
+      setAuthUser(data.user, data.token);
+      showSuccess(`مرحباً بك مجدداً، ${data.user.name}`);
       onClose();
-      if (onSuccess) onSuccess(authenticatedUser);
+      if (onSuccess) onSuccess(data.user);
     } catch (err: any) {
-      setError(formatErrorMessage(err, 'حدث خطأ أثناء تسجيل الدخول'));
-    } finally {
-      setIsLoading(false);
+      const msg = formatErrorMessage(err, 'حدث خطأ أثناء تسجيل الدخول: تحقق من البريد الإلكتروني وكلمة المرور');
+      setError(msg);
+      showError(msg);
     }
   };
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setIsLoading(true);
+
     try {
       if (!regName.trim()) throw new Error('يرجى إدخال الاسم الكامل');
       if (!regEmail.includes('@')) throw new Error('يرجى إدخال بريد إلكتروني صحيح');
@@ -69,14 +95,58 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (regPass.length < 6) throw new Error('كلمة المرور يجب أن لا تقل عن 6 أحرف أو أرقام');
       if (regPass !== regPassConfirm) throw new Error('كلمة المرور وتأكيدها غير متطابقين');
 
-      // Server strictly enforces role: 'CUSTOMER' and saves to real production DB
-      const newUser = await register(regName, regEmail, regPhone, regPass);
+      const data = await registerMutation.mutateAsync({
+        name: regName.trim(),
+        email: regEmail.trim(),
+        phone: regPhone.trim(),
+        password: regPass
+      });
+
+      // Update AuthContext state
+      setAuthUser(data.user, data.token);
+
+      // Requirement 5: Success toast notification
+      showSuccess('تم إنشاء حسابك بنجاح.');
+
       onClose();
-      if (onSuccess) onSuccess(newUser);
+      if (onSuccess) onSuccess(data.user);
     } catch (err: any) {
-      setError(formatErrorMessage(err, 'حدث خطأ أثناء إنشاء الحساب'));
-    } finally {
-      setIsLoading(false);
+      const code = err?.code;
+      const returnedEmail = err?.email || regEmail.trim();
+
+      // Case 2: Email and phone belong to the same existing user
+      if (code === 'ACCOUNT_EXISTS') {
+        const msg = 'لديك حساب مسجل بالفعل، سيتم تحويلك إلى تسجيل الدخول.';
+        showInfo(msg);
+        setError(msg);
+        setTab('login');
+        setLoginEmail(returnedEmail);
+        window.history.pushState(null, '', '/login');
+        return;
+      }
+
+      // Case 1: Email already registered
+      if (code === 'EMAIL_EXISTS' || (err.message && err.message.includes('البريد الإلكتروني مسجل'))) {
+        const msg = 'هذا البريد الإلكتروني مسجل بالفعل، يرجى تسجيل الدخول.';
+        showError(msg);
+        setError(msg);
+        setTab('login');
+        setLoginEmail(returnedEmail);
+        window.history.pushState(null, '', '/login');
+        return;
+      }
+
+      // Case 4: Phone already registered
+      if (code === 'PHONE_EXISTS' || (err.message && err.message.includes('رقم الهاتف مسجل'))) {
+        const msg = 'رقم الهاتف مسجل بالفعل.';
+        showError(msg);
+        setError(msg);
+        return;
+      }
+
+      const msg = formatErrorMessage(err, 'حدث خطأ أثناء إنشاء الحساب');
+      setError(msg);
+      showError(msg);
     }
   };
 
@@ -218,10 +288,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50"
+              disabled={isSubmitting}
+              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer"
             >
-              {isLoading ? 'جاري التحقق من السيرفر...' : 'تسجيل الدخول'}
+              {loginMutation.isPending ? 'جاري التحقق وتسجيل الدخول...' : 'تسجيل الدخول'}
             </button>
 
             {/* Clear Admin Login Button (Requirement 2) */}
@@ -332,10 +402,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full mt-2 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50"
+              disabled={isSubmitting}
+              className="w-full mt-2 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer"
             >
-              {isLoading ? 'جاري إنشاء الحساب...' : 'تأكيد وإنشاء الحساب'}
+              {registerMutation.isPending ? 'جاري إنشاء الحساب في السيرفر...' : 'تأكيد وإنشاء الحساب'}
             </button>
 
             {/* Clear Admin Login Button (Requirement 2) */}
