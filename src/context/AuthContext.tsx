@@ -12,6 +12,7 @@ interface AuthContextType {
   register: (name: string, email: string, phone: string, pass?: string) => Promise<User>;
   logout: () => void;
   updateProfile: (data: { name: string; phone: string }) => Promise<void>;
+  setAuthUser: (authUser: User, authToken: string) => void;
   isLoading: boolean;
 }
 
@@ -151,6 +152,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(updated));
   };
 
+  const setAuthUser = (authUser: User, authToken: string) => {
+    setUser(authUser);
+    setToken(authToken);
+    localStorage.setItem(TOKEN_KEY, authToken);
+    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(authUser));
+    document.cookie = `${TOKEN_KEY}=${authToken}; path=/; max-age=604800; SameSite=Lax`;
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -163,6 +172,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         register,
         logout,
         updateProfile,
+        setAuthUser,
         isLoading,
       }}
     >

@@ -30,8 +30,12 @@ import {
   TrendingUp,
   DollarSign,
   ShieldCheck,
-  Menu
+  Menu,
+  Download,
+  FileText
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   Booking,
   BookingStatus,
@@ -82,6 +86,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Navigation tabs inside Admin - initialized from URL path (e.g. /admin/bookings)
   const getInitialAdminTab = (): 'overview' | 'bookings' | 'calendar' | 'customers' | 'services' | 'packages' | 'gallery' | 'reviews' | 'settings' => {
     const p = window.location.pathname;
+    if (p === '/admin/dashboard' || p === '/admin') return 'overview';
     if (p === '/admin/bookings') return 'bookings';
     if (p === '/admin/calendar') return 'calendar';
     if (p === '/admin/customers' || p === '/admin/users') return 'customers';
@@ -99,7 +104,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSwitchAdminTab = (tabId: 'overview' | 'bookings' | 'calendar' | 'customers' | 'services' | 'packages' | 'gallery' | 'reviews' | 'settings') => {
     setAdminTab(tabId);
-    const targetUrl = tabId === 'overview' ? '/admin' : `/admin/${tabId}`;
+    const targetUrl = tabId === 'overview' ? '/admin/dashboard' : `/admin/${tabId}`;
     if (window.location.pathname !== targetUrl) {
       window.history.pushState(null, '', targetUrl);
     }
@@ -347,6 +352,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       b.customerPhone.includes(bookingSearch);
     return matchStatus && matchSearch;
   });
+
+  // Export Bookings Table to PDF
+  const handleExportBookingsPDF = () => {
+    try {
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+      // Title & Header
+      doc.setFontSize(16);
+      doc.setTextColor(217, 119, 6); // amber-600
+      doc.text('Dhu Raydan Hall - Bookings Report', 14, 15);
+
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        `Generated: ${new Date().toLocaleString()} | Total Bookings: ${filteredBookings.length}`,
+        14,
+        22
+      );
+
+      const tableData = filteredBookings.map((b) => [
+        b.bookingCode,
+        b.customerName,
+        b.customerPhone,
+        b.eventDate,
+        b.timeSlot === 'evening' ? 'Evening (مسائية)' : b.timeSlot === 'morning' ? 'Morning (صباحية)' : 'Full Day (يوم كامل)',
+        b.packageName || 'Basic',
+        b.guestCount ? `${b.guestCount}` : '-',
+        `${Number(b.totalPrice).toLocaleString()} YER`,
+        b.status.toUpperCase()
+      ]);
+
+      autoTable(doc, {
+        head: [['Code', 'Customer Name', 'Phone', 'Event Date', 'Slot', 'Package', 'Guests', 'Total Price', 'Status']],
+        body: tableData,
+        startY: 26,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [217, 119, 6],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold'
+        },
+        styles: {
+          fontSize: 9,
+          cellPadding: 3
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252]
+        }
+      });
+
+      doc.save(`DhuRaydan_Bookings_${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (err: any) {
+      console.error('Failed to export PDF:', err);
+      alert('حدث خطأ أثناء تصدير ملف PDF: ' + (err?.message || ''));
+    }
+  };
 
   const sidebarItems = [
     { id: 'overview', label: 'لوحة الإحصائيات', icon: LayoutDashboard },
@@ -611,13 +672,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </p>
               </div>
 
-              <button
-                onClick={() => setCurrentTab('booking')}
-                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold shadow flex items-center gap-1.5 self-start sm:self-auto"
-              >
-                <Plus className="w-4 h-4" />
-                <span>إضافة حجز يدوي مباشر</span>
-              </button>
+              <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                <button
+                  onClick={handleExportBookingsPDF}
+                  className="px-4 py-2 rounded-xl bg-[#161c2b] hover:bg-[#1e263a] text-amber-300 border border-amber-500/30 text-xs font-bold shadow flex items-center gap-1.5 transition-all"
+                  title="تصدير جدول الحجوزات الحالي إلى ملف PDF رسمي"
+                >
+                  <Download className="w-4 h-4 text-amber-400" />
+                  <span>تصدير تقرير (PDF)</span>
+                </button>
+
+                <button
+                  onClick={() => setCurrentTab('booking')}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold shadow flex items-center gap-1.5 transition-all"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة حجز يدوي مباشر</span>
+                </button>
+              </div>
             </div>
 
             {/* Search & Filter Tabs */}

@@ -1,0 +1,5 @@
+{
+  "name": "dhuraydan-server-app-shim",
+  "type": "module",
+  "main": "index.js"
+}

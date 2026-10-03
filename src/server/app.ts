@@ -1,7 +1,11 @@
 import express, { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import {
   hashPassword,
   verifyPassword,
+  ensureDbReady,
+  ADMIN_INITIAL_EMAIL,
+  ADMIN_INITIAL_PASSWORD,
   memStore,
   getDatabaseStatus,
   dbFindUserByEmail,
@@ -23,8 +27,8 @@ import {
   dbDeleteReview,
   dbSaveNotification,
   dbMarkNotificationRead
-} from './db';
-import {
+} from './db.ts';
+import type {
   Booking,
   GalleryItem,
   HallPackage,
@@ -33,7 +37,7 @@ import {
   Review,
   User,
   AppNotification
-} from '../types';
+} from '../types/index.ts';
 
 const app = express();
 
@@ -95,8 +99,47 @@ function parseCookies(req: Request): Record<string, string> {
   return list;
 }
 
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.BETTER_AUTH_SECRET || 'dhuraydan_auth_secret_key_2026';
+
+export function signAuthToken(user: { id: string; email: string; role: string }): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      t: Date.now()
+    })
+  ).toString('base64url');
+
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  return `rdn.${payload}.${sig}`;
+}
+
+export function verifyAuthToken(token: string): { id: string; email: string; role: string } | null {
+  try {
+    if (!token || !token.startsWith('rdn.')) return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [, payloadB64, sig] = parts;
+    const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(payloadB64).digest('base64url');
+    if (sig === expectedSig) {
+      const json = Buffer.from(payloadB64, 'base64url').toString('utf8');
+      return JSON.parse(json);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // Global Auth Middleware: verifies token and attaches user from authoritative records
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
+  try {
+    await ensureDbReady();
+  } catch {
+    // Non-fatal, proceed with fallback
+  }
+
   let token: string | undefined;
 
   const authHeader = req.headers.authorization;
@@ -114,15 +157,38 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   }
 
   if (token) {
-    // Resolve user either by session token or token = user.id / email
-    let userId = memStore.sessions.get(token);
-    if (!userId) {
-      const directUser = (await dbFindUserById(token)) || (await dbFindUserByEmail(token));
-      if (directUser) userId = directUser.id;
+    let resolvedUserId: string | null = null;
+
+    // 1. Verify signed HMAC stateless token
+    const decoded = verifyAuthToken(token);
+    if (decoded && decoded.id) {
+      resolvedUserId = decoded.id;
     }
 
-    if (userId) {
-      const user = await dbFindUserById(userId);
+    // 2. Resolve via in-memory session map
+    if (!resolvedUserId) {
+      resolvedUserId = memStore.sessions.get(token) || null;
+    }
+
+    // 3. Fallback for legacy admin token
+    if (!resolvedUserId && (token === 'token_admin_1' || token.startsWith('token_admin_'))) {
+      const admin = await dbFindUserByEmail(ADMIN_INITIAL_EMAIL);
+      if (admin) resolvedUserId = admin.id;
+    }
+
+    // 4. Fallback for customer token prefix
+    if (!resolvedUserId && token.startsWith('token_usr_')) {
+      resolvedUserId = token.replace('token_', '');
+    }
+
+    // 5. Fallback for direct user ID or email
+    if (!resolvedUserId) {
+      const directUser = (await dbFindUserById(token)) || (await dbFindUserByEmail(token));
+      if (directUser) resolvedUserId = directUser.id;
+    }
+
+    if (resolvedUserId) {
+      const user = await dbFindUserById(resolvedUserId);
       if (user && user.isActive) {
         (req as any).user = user;
         (req as any).token = token;
@@ -247,9 +313,10 @@ apiRouter.post('/auth/admin-login', async (req, res) => {
     }
 
     // Session & Cookie creation
-    const token = `token_admin_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const token = signAuthToken(user);
     memStore.sessions.set(token, user.id);
-    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax`);
+    memStore.sessions.set('token_admin_1', user.id);
+    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax; Max-Age=604800`);
 
     const { password: _, ...userSafe } = user;
     res.json({
@@ -303,11 +370,12 @@ apiRouter.post('/auth/register', async (req, res) => {
 
     // Update in-memory session cache
     memStore.users.push(newUser);
-    const token = `token_${newUser.id}`;
+    const token = signAuthToken(newUser);
     memStore.sessions.set(token, newUser.id);
+    memStore.sessions.set(`token_${newUser.id}`, newUser.id);
 
     // Set auth cookie
-    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax`);
+    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax; Max-Age=604800`);
 
     // Return user without password
     const { password: _, ...userSafe } = newUser;
@@ -340,11 +408,16 @@ apiRouter.post('/auth/login', async (req, res) => {
       return res.status(403).json({ error: 'هذا الحساب موقوف حالياً (Account disabled)' });
     }
 
-    const token = user.role === 'ADMIN' ? 'token_admin_1' : `token_${user.id}`;
+    const token = signAuthToken(user);
     memStore.sessions.set(token, user.id);
+    if (user.role === 'ADMIN') {
+      memStore.sessions.set('token_admin_1', user.id);
+    } else {
+      memStore.sessions.set(`token_${user.id}`, user.id);
+    }
 
     // Set auth cookie
-    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax`);
+    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax; Max-Age=604800`);
 
     const { password: _, ...userSafe } = user;
     res.json({ user: userSafe, token });

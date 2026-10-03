@@ -1,12 +1,11 @@
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 import http from 'http';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import express from 'express';
-import app from './src/server/app';
-
-dotenv.config();
+import app from './src/server/app.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

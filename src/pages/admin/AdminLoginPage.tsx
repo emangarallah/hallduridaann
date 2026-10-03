@@ -13,7 +13,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
   onSuccess,
   setCurrentTab,
 }) => {
-  const { user } = useAuth();
+  const { user, setAuthUser } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -34,9 +34,9 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
           <button
             onClick={() => {
               setCurrentTab('admin');
-              window.history.pushState(null, '', '/admin');
+              window.history.pushState(null, '', '/admin/dashboard');
             }}
-            className="w-full py-2.5 rounded-xl bg-amber-500 text-black font-bold text-xs hover:bg-amber-400 shadow-md"
+            className="w-full py-2.5 rounded-xl bg-amber-500 text-black font-bold text-xs hover:bg-amber-400 shadow-md cursor-pointer"
           >
             الانتقال إلى لوحة تحكم الإدارة
           </button>
@@ -66,16 +66,14 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
       const data = await parseResponseJson(res);
 
       if (!res.ok) {
-        throw new Error(formatErrorMessage(data?.error || data, 'فشل تسجيل الدخول كمدير'));
+        throw new Error(formatErrorMessage(data?.error || data, 'فشل تسجيل الدخول كمدير: تحقق من البريد الإلكتروني وكلمة المرور'));
       }
 
       const authenticatedUser: User = data.user;
       const authToken: string = data.token;
 
-      // Persist in localStorage and update app state
-      localStorage.setItem('rdn_auth_token', authToken);
-      localStorage.setItem('rdn_current_user', JSON.stringify(authenticatedUser));
-      document.cookie = `rdn_auth_token=${authToken}; path=/; max-age=604800; SameSite=Lax`;
+      // Update AuthContext and storage
+      setAuthUser(authenticatedUser, authToken);
 
       onSuccess(authenticatedUser);
     } catch (err: any) {

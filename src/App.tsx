@@ -91,7 +91,7 @@ function MainApp() {
     if (path === '/admin/login') {
       if (user && user.role === 'ADMIN') {
         setCurrentTab('admin');
-        window.history.pushState(null, '', '/admin');
+        window.history.pushState(null, '', '/admin/dashboard');
       } else {
         setCurrentTab('admin-login');
       }
@@ -182,20 +182,34 @@ function MainApp() {
 
     // Strict Guard for /admin and all admin routes
     if (tab === 'admin') {
-      if (!user) {
+      const currentUser = user || (() => {
+        try {
+          const cached = localStorage.getItem('rdn_current_user');
+          return cached ? JSON.parse(cached) : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      if (!currentUser) {
         // Case 3: Redirect unauthenticated user to /admin/login
         setCurrentTab('admin-login');
         window.history.pushState(null, '', '/admin/login');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
-      if (user.role !== 'ADMIN') {
+      if (currentUser.role !== 'ADMIN') {
         // Case 1: Customer visits /admin -> reject and show 403 Forbidden
         setCurrentTab('403');
         window.history.pushState(null, '', '/403');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
+
+      setCurrentTab('admin');
+      window.history.pushState(null, '', '/admin/dashboard');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
     }
 
     if (tab === 'account' && !user) {
@@ -261,6 +275,7 @@ function MainApp() {
             onSuccess={() => {
               refreshAllData();
               navigate('admin');
+              window.history.pushState(null, '', '/admin/dashboard');
             }}
           />
         );
