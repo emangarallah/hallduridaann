@@ -1,0 +1,6 @@
+{
+  "name": "قاعة ذو ريدان للأفراح والمناسبات",
+  "description": "نظام حجز وإدارة متكامل لقاعة ذو ريدان للأفراح والمناسبات بصنعاء، اليمن. تصفح الباقات والخدمات والتقويم واحجز مناسبتك أونلاين.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
