@@ -63,9 +63,6 @@ import {
   getReviews,
   getServices,
   getUsers,
-  getNotifications,
-  markNotificationRead,
-  markAllNotificationsRead,
   toggleReviewApproval,
   toggleUserStatus,
   updateUserRole,
@@ -74,6 +71,11 @@ import {
   updatePackage,
   updateService
 } from '../../services/api';
+import {
+  useNotificationsQuery,
+  useMarkNotificationReadOptimisticMutation,
+  useMarkAllNotificationsReadOptimisticMutation
+} from '../../hooks/useCustomerBookingQuery';
 import { useAuth } from '../../context/AuthContext';
 
 interface AdminDashboardProps {
@@ -178,53 +180,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [settingsForm, setSettingsForm] = useState<HallSettings | null>(null);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
-  // Admin Live Notifications state
-  const [adminNotifications, setAdminNotifications] = useState<AppNotification[]>([]);
+  // Admin Live Notifications state backed by TanStack Query
+  const { data: adminNotifications = [] } = useNotificationsQuery(user?.id || 'admin', true);
+  const markAdminNotifMutation = useMarkNotificationReadOptimisticMutation();
+  const markAllAdminNotifsMutation = useMarkAllNotificationsReadOptimisticMutation();
   const [adminNotifsOpen, setAdminNotifsOpen] = useState(false);
 
   useEffect(() => {
     loadAllData();
   }, []);
 
-  // Requirement: Live Polling for Admin Notifications every 5 seconds without page reload
-  useEffect(() => {
-    const fetchAdminNotifs = async () => {
-      try {
-        const notifs = await getNotifications(user?.id || 'admin', true);
-        setAdminNotifications(notifs);
-        // Refresh bookings and stats in background to keep calendar and counters up to date
-        const bData = await getBookings();
-        setBookings(bData);
-        const sData = await getDashboardStats();
-        setStats(sData);
-      } catch {
-        // silent
-      }
-    };
-
-    fetchAdminNotifs();
-    const interval = setInterval(fetchAdminNotifs, 5000);
-
-    const handleSync = () => fetchAdminNotifs();
-    window.addEventListener('dhuraydan:notif-update', handleSync);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('dhuraydan:notif-update', handleSync);
-    };
-  }, [user]);
-
   const unreadAdminCount = adminNotifications.filter((n) => !n.isRead).length;
 
-  const handleAdminNotifClick = async (notif: AppNotification) => {
-    // 1. Immediately hide notification completely from the popup
-    setAdminNotifications((prev) => prev.filter((n) => n.id !== notif.id));
+  const handleAdminNotifClick = (notif: AppNotification) => {
+    // 1. Instantly update React Query Cache with onMutate (zeroes badge & dismisses in 0ms)
+    markAdminNotifMutation.mutate(notif.id);
     setAdminNotifsOpen(false);
 
-    // 2. Mark as read on server & cache
-    await markNotificationRead(notif.id);
-
-    // 3. Open booking details if applicable
+    // 2. Open booking details if applicable
     if (notif.bookingId) {
       const targetBooking = bookings.find((b) => b.id === notif.bookingId);
       if (targetBooking) {
@@ -235,9 +208,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleMarkAllAdminNotifsRead = async () => {
-    await markAllNotificationsRead(user?.id || '', true);
-    setAdminNotifications([]);
+  const handleMarkAllAdminNotifsRead = () => {
+    markAllAdminNotifsMutation.mutate({ userId: user?.id || '', isAdmin: true });
     setAdminNotifsOpen(false);
   };
 

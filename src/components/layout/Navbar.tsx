@@ -14,7 +14,11 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { getNotifications, markNotificationRead, getHallSettings } from '../../services/api';
+import { getHallSettings } from '../../services/api';
+import {
+  useNotificationsQuery,
+  useMarkNotificationReadOptimisticMutation
+} from '../../hooks/useCustomerBookingQuery';
 import { AppNotification, HallSettings } from '../../types';
 
 interface NavbarProps {
@@ -27,49 +31,24 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
   const { user, isAdmin, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [settings, setSettings] = useState<HallSettings | null>(null);
+
+  // TanStack Query for Live Notifications with automatic polling and cache management
+  const { data: notifications = [] } = useNotificationsQuery(user?.id, isAdmin);
+  const markReadMutation = useMarkNotificationReadOptimisticMutation();
 
   useEffect(() => {
     getHallSettings().then(setSettings);
   }, []);
 
-  useEffect(() => {
-    if (!user) {
-      setNotifications([]);
-      return;
-    }
-
-    const fetchNotifs = () => {
-      getNotifications(user.id, user.role === 'ADMIN')
-        .then(setNotifications)
-        .catch(() => {});
-    };
-
-    fetchNotifs();
-    // Auto-polling every 5 seconds to show new booking notifications without page reload
-    const interval = setInterval(fetchNotifs, 5000);
-
-    const handleSync = () => fetchNotifs();
-    window.addEventListener('dhuraydan:notif-update', handleSync);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('dhuraydan:notif-update', handleSync);
-    };
-  }, [user, currentTab]);
-
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
-  const handleNotificationClick = async (notif: AppNotification) => {
-    // 1. Immediately remove from dropdown list so it never appears again
-    setNotifications(prev => prev.filter(n => n.id !== notif.id));
+  const handleNotificationClick = (notif: AppNotification) => {
+    // 1. Instantly update React Query Cache with onMutate (zeroes badge & dismisses in 0ms)
+    markReadMutation.mutate(notif.id);
     setNotificationsOpen(false);
 
-    // 2. Mark as read on server & cache
-    await markNotificationRead(notif.id);
-
-    // 3. Navigate
+    // 2. Navigate immediately
     if (isAdmin) {
       setCurrentTab('admin');
     } else {

@@ -2,13 +2,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Booking,
   BookingStatus,
-  User
+  User,
+  AppNotification
 } from '../types';
 import {
   getBookings,
   createBooking,
   cancelBooking,
-  updateBookingStatus
+  updateBookingStatus,
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  dismissNotificationId
 } from '../services/api';
 import { fetchApi, parseResponseJson, formatErrorMessage } from '../utils/apiConfig';
 
@@ -39,6 +44,132 @@ export interface LoginResponse {
   user: User;
   token: string;
   error?: string;
+}
+
+/**
+ * Auth User Query with synchronous initialData from localStorage
+ */
+export function useAuthUserQuery() {
+  return useQuery<User | null>({
+    queryKey: ['authUser'],
+    queryFn: async () => {
+      try {
+        const res = await fetchApi('/api/auth/me');
+        if (res.ok) {
+          const data = await parseResponseJson(res);
+          return data.user || null;
+        }
+      } catch {}
+      const cached = localStorage.getItem('rdn_current_user');
+      return cached ? JSON.parse(cached) : null;
+    },
+    initialData: () => {
+      try {
+        const cached = localStorage.getItem('rdn_current_user');
+        return cached ? JSON.parse(cached) : null;
+      } catch {
+        return null;
+      }
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+/**
+ * Notifications Query with auto-polling every 5 seconds
+ */
+export function useNotificationsQuery(userId?: string, isAdmin = false) {
+  return useQuery<AppNotification[]>({
+    queryKey: ['notifications', userId || 'all', isAdmin ? 'admin' : 'user'],
+    queryFn: async () => {
+      if (!userId && !isAdmin) return [];
+      return await getNotifications(userId || '', isAdmin);
+    },
+    enabled: Boolean(userId || isAdmin),
+    staleTime: 3000,
+    refetchInterval: 5000, // Live Polling background update
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * Optimistic Notification Read Mutation (Instantly removes notification & zeroes badge)
+ */
+export function useMarkNotificationReadOptimisticMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (notifId: string) => {
+      return await markNotificationRead(notifId);
+    },
+    onMutate: async (notifId: string) => {
+      // 1. Cancel ongoing notification queries to avoid overwrite
+      await queryClient.cancelQueries({ queryKey: ['notifications'] });
+
+      // 2. Snapshot previous cache
+      const previousData = queryClient.getQueriesData<AppNotification[]>({
+        queryKey: ['notifications']
+      });
+
+      // 3. Mark dismissed immediately in persistent storage
+      dismissNotificationId(notifId);
+
+      // 4. Optimistically remove from all active queries right away
+      queryClient.setQueriesData<AppNotification[]>(
+        { queryKey: ['notifications'] },
+        (old = []) => old.filter((n) => n.id !== notifId)
+      );
+
+      return { previousData };
+    },
+    onError: (_err, _notifId, context) => {
+      if (context?.previousData) {
+        context.previousData.forEach(([qKey, data]) => {
+          queryClient.setQueryData(qKey, data);
+        });
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+  });
+}
+
+/**
+ * Optimistic Mark All Notifications Read Mutation
+ */
+export function useMarkAllNotificationsReadOptimisticMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ userId, isAdmin }: { userId: string; isAdmin?: boolean }) => {
+      return await markAllNotificationsRead(userId, isAdmin);
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['notifications'] });
+      const previousData = queryClient.getQueriesData<AppNotification[]>({
+        queryKey: ['notifications']
+      });
+
+      // Optimistically clear all notifications so badge becomes 0 instantaneously
+      queryClient.setQueriesData<AppNotification[]>(
+        { queryKey: ['notifications'] },
+        () => []
+      );
+
+      return { previousData };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previousData) {
+        context.previousData.forEach(([qKey, data]) => {
+          queryClient.setQueryData(qKey, data);
+        });
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+  });
 }
 
 /**
@@ -101,7 +232,7 @@ export function useRegisterCustomerMutation() {
 export function useLoginCustomerMutation() {
   const queryClient = useQueryClient();
 
-  return useMutation<LoginResponse, Error, LoginPayload>({
+  return useMutation<LoginResponse, Error, LoginPayload, { previousUser: User | null | undefined }>({
     mutationFn: async (payload: LoginPayload) => {
       const res = await fetchApi('/api/auth/login', {
         method: 'POST',
@@ -121,9 +252,36 @@ export function useLoginCustomerMutation() {
 
       return data;
     },
-    onSuccess: () => {
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: ['authUser'] });
+      const previousUser = queryClient.getQueryData<User | null>(['authUser']);
+
+      // Optimistic user for instant client-side feedback
+      const optimisticUser: User = {
+        id: `usr_opt_${Date.now()}`,
+        name: payload.email.split('@')[0],
+        email: payload.email.trim(),
+        phone: '',
+        role: payload.email.toLowerCase().includes('admin') ? 'ADMIN' : 'CUSTOMER',
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      };
+
+      queryClient.setQueryData(['authUser'], optimisticUser);
+      return { previousUser };
+    },
+    onSuccess: (data) => {
+      if (data?.user) {
+        queryClient.setQueryData(['authUser'], data.user);
+      }
       queryClient.invalidateQueries({ queryKey: ['bookings'] });
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (_err, _vars, context) => {
+      if (context) {
+        queryClient.setQueryData(['authUser'], context.previousUser);
+      }
     },
   });
 }

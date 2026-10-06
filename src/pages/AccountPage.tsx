@@ -18,7 +18,12 @@ import {
   Eye
 } from 'lucide-react';
 import { Booking, AppNotification } from '../types';
-import { getBookings, getNotifications, markNotificationRead, markAllNotificationsRead } from '../services/api';
+import { getBookings } from '../services/api';
+import {
+  useNotificationsQuery,
+  useMarkNotificationReadOptimisticMutation,
+  useMarkAllNotificationsReadOptimisticMutation
+} from '../hooks/useCustomerBookingQuery';
 import { useAuth } from '../context/AuthContext';
 
 interface AccountPageProps {
@@ -38,8 +43,12 @@ export const AccountPage: React.FC<AccountPageProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'bookings' | 'profile' | 'notifications'>('bookings');
 
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // TanStack Query live notifications with optimistic updates
+  const { data: notifications = [] } = useNotificationsQuery(user?.id, user?.role === 'ADMIN');
+  const markReadMutation = useMarkNotificationReadOptimisticMutation();
+  const markAllReadMutation = useMarkAllNotificationsReadOptimisticMutation();
 
   // Edit profile form
   const [name, setName] = useState('');
@@ -56,14 +65,6 @@ export const AccountPage: React.FC<AccountPageProps> = ({
       setName(user.name);
       setPhone(user.phone);
       fetchUserData();
-
-      const handleSync = () => {
-        getNotifications(user.id, user.role === 'ADMIN')
-          .then(setNotifications)
-          .catch(() => {});
-      };
-      window.addEventListener('dhuraydan:notif-update', handleSync);
-      return () => window.removeEventListener('dhuraydan:notif-update', handleSync);
     }
   }, [user]);
 
@@ -80,8 +81,6 @@ export const AccountPage: React.FC<AccountPageProps> = ({
             (b.customerEmail && b.customerEmail.toLowerCase() === user.email.toLowerCase())
         )
       );
-      const notifs = await getNotifications(user.id, user.role === 'ADMIN');
-      setNotifications(notifs);
     } finally {
       setLoading(false);
     }
@@ -104,12 +103,9 @@ export const AccountPage: React.FC<AccountPageProps> = ({
     setTimeout(() => setPassSuccess(false), 3000);
   };
 
-  const handleNotificationClick = async (notif: AppNotification) => {
-    // 1. Immediately hide and dismiss notification
-    setNotifications((prev) => prev.filter((n) => n.id !== notif.id));
-
-    // 2. Mark as read on server & cache
-    await markNotificationRead(notif.id);
+  const handleNotificationClick = (notif: AppNotification) => {
+    // 1. Instantly update React Query Cache with onMutate (zeroes badge & dismisses in 0ms)
+    markReadMutation.mutate(notif.id);
 
     if (notif.bookingId) {
       const b = bookings.find((x) => x.id === notif.bookingId);
@@ -117,10 +113,9 @@ export const AccountPage: React.FC<AccountPageProps> = ({
     }
   };
 
-  const handleMarkAllRead = async () => {
+  const handleMarkAllRead = () => {
     if (!user) return;
-    await markAllNotificationsRead(user.id, user.role === 'ADMIN');
-    setNotifications([]);
+    markAllReadMutation.mutate({ userId: user.id, isAdmin: user.role === 'ADMIN' });
   };
 
   if (!user) {

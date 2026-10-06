@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { User, UserRole } from '../types';
 import { fetchApi, parseResponseJson, formatErrorMessage } from '../utils/apiConfig';
 
@@ -22,11 +23,29 @@ const TOKEN_KEY = 'rdn_auth_token';
 const CURRENT_USER_KEY = 'rdn_current_user';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  // Synchronize and verify session with backend server on mount
+  // Instant synchronous initialization from cache to prevent navigation latency
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const cached = localStorage.getItem(CURRENT_USER_KEY);
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  });
+
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Background revalidation with authoritative server session
   useEffect(() => {
     const verifyStoredSession = async () => {
       try {
@@ -34,41 +53,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!storedToken) {
           setUser(null);
           setToken(null);
-          setIsLoading(false);
+          queryClient.setQueryData(['authUser'], null);
           return;
         }
 
         setToken(storedToken);
 
-        // Verify with server /api/auth/me to fetch authoritative server role
+        // Verify with server /api/auth/me in background
         const res = await fetchApi('/api/auth/me');
 
         if (res.ok) {
           const data = await parseResponseJson(res);
           if (data.user && data.user.isActive) {
             setUser(data.user);
+            queryClient.setQueryData(['authUser'], data.user);
             localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(data.user));
           } else {
-            // User suspended or invalid
             logout();
           }
         } else {
-          // Token expired or invalid on server
           logout();
         }
       } catch (err) {
-        console.error('Session verification error:', err);
-        // Fallback to stored user cache if network is temporarily offline
-        const cachedUser = localStorage.getItem(CURRENT_USER_KEY);
-        if (cachedUser) {
-          try {
-            setUser(JSON.parse(cachedUser));
-          } catch {
-            logout();
-          }
-        }
-      } finally {
-        setIsLoading(false);
+        console.warn('Session verification fallback to cache:', err);
       }
     };
 
@@ -95,6 +102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setUser(authenticatedUser);
     setToken(authToken);
+    queryClient.setQueryData(['authUser'], authenticatedUser);
     localStorage.setItem(TOKEN_KEY, authToken);
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(authenticatedUser));
 
@@ -124,6 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setUser(newUser);
     setToken(authToken);
+    queryClient.setQueryData(['authUser'], newUser);
     localStorage.setItem(TOKEN_KEY, authToken);
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(newUser));
 
@@ -141,6 +150,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setUser(null);
     setToken(null);
+    queryClient.setQueryData(['authUser'], null);
+    queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    queryClient.invalidateQueries({ queryKey: ['bookings'] });
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(CURRENT_USER_KEY);
   };
@@ -149,12 +161,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!user) return;
     const updated = { ...user, ...data };
     setUser(updated);
+    queryClient.setQueryData(['authUser'], updated);
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(updated));
   };
 
   const setAuthUser = (authUser: User, authToken: string) => {
     setUser(authUser);
     setToken(authToken);
+    queryClient.setQueryData(['authUser'], authUser);
     localStorage.setItem(TOKEN_KEY, authToken);
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(authUser));
     document.cookie = `${TOKEN_KEY}=${authToken}; path=/; max-age=604800; SameSite=Lax`;

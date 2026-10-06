@@ -118,12 +118,29 @@ export const memStore = {
   notifications: [] as AppNotification[]
 };
 
-// PostgreSQL Connection Pool Setup
-let pgPool: Pool | null = null;
-let isPgConnected = false;
+// PostgreSQL Connection Pool Setup with Neon Serverless Pooling Optimization
+const globalWithPg = globalThis as typeof globalThis & {
+  _dhuraydanPgPool?: Pool;
+  _dhuraydanPgConnected?: boolean;
+  _dhuraydanPgTablesReady?: boolean;
+};
+
+let pgPool: Pool | null = globalWithPg._dhuraydanPgPool || null;
+let isPgConnected = Boolean(globalWithPg._dhuraydanPgConnected);
 let pgConnectionError: string | null = null;
 
-const dbUrl = (process.env.DATABASE_URL || '').trim();
+const rawDbUrl = (process.env.DATABASE_URL || '').trim();
+
+// Ensure Neon Connection Pooling endpoint is used for reduced cold starts
+function getNeonPooledUrl(url: string): string {
+  if (!url) return url;
+  if (url.includes('.neon.tech') && !url.includes('-pooler.')) {
+    return url.replace('.neon.tech', '-pooler.neon.tech');
+  }
+  return url;
+}
+
+const dbUrl = getNeonPooledUrl(rawDbUrl);
 
 // Clean database URL to ignore invalid template values
 const isValidPgUrl =
@@ -132,24 +149,33 @@ const isValidPgUrl =
 
 const isLocalhost = dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
 const useSsl = !isLocalhost || dbUrl.includes('sslmode=require');
+const isVercelServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
 let initPromise: Promise<boolean> | null = null;
 
 export async function ensureDbReady(): Promise<boolean> {
   if (!pgPool) return false;
-  if (isPgConnected) return true;
+  if (isPgConnected && globalWithPg._dhuraydanPgTablesReady) return true;
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
     try {
-      await pgPool!.query('SELECT NOW()');
-      isPgConnected = true;
-      pgConnectionError = null;
-      console.log('[Dhu Raydan Database] Connected successfully to PostgreSQL.');
-      await initPgTables();
+      if (!isPgConnected) {
+        await pgPool!.query('SELECT 1');
+        isPgConnected = true;
+        globalWithPg._dhuraydanPgConnected = true;
+        pgConnectionError = null;
+        console.log('[Dhu Raydan Database] Connected successfully to Neon PostgreSQL pooler.');
+      }
+
+      if (!globalWithPg._dhuraydanPgTablesReady) {
+        await initPgTables();
+        globalWithPg._dhuraydanPgTablesReady = true;
+      }
       return true;
     } catch (err: any) {
       isPgConnected = false;
+      globalWithPg._dhuraydanPgConnected = false;
       pgConnectionError = err.message || 'PostgreSQL Connection Error';
       console.warn('[Dhu Raydan Database] PostgreSQL connection error:', err.message);
       return false;
@@ -163,13 +189,19 @@ export async function ensureDbReady(): Promise<boolean> {
 
 if (isValidPgUrl && !dbUrl.includes('secure_password_here')) {
   try {
-    pgPool = new Pool({
-      connectionString: dbUrl,
-      ssl: useSsl ? { rejectUnauthorized: false } : false,
-      connectionTimeoutMillis: 10000,
-      idleTimeoutMillis: 10000,
-      max: process.env.VERCEL ? 3 : 10,
-    });
+    if (!pgPool) {
+      pgPool = new Pool({
+        connectionString: dbUrl,
+        ssl: useSsl ? { rejectUnauthorized: false } : false,
+        connectionTimeoutMillis: 5000,
+        idleTimeoutMillis: isVercelServerless ? 30000 : 10000,
+        max: isVercelServerless ? 2 : 10,
+        allowExitOnIdle: true,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10000,
+      });
+      globalWithPg._dhuraydanPgPool = pgPool;
+    }
 
     // Eagerly initiate connection and schema setup in background
     ensureDbReady().catch((err) => {

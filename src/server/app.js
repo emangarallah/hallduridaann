@@ -514,51 +514,47 @@ var memStore = {
   bookings: [...initialBookings],
   gallery: [...initialGallery],
   reviews: [...initialReviews],
-  notifications: [
-    {
-      id: "notif_1",
-      userId: "usr_customer_1",
-      title: "\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062D\u062C\u0632\u0643 \u0628\u0646\u062C\u0627\u062D!",
-      message: "\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062D\u062C\u0632\u0643 \u0631\u0642\u0645 RDN-2026-101 \u0644\u0645\u0646\u0627\u0633\u0628\u0629 \u0627\u0644\u0632\u0641\u0627\u0641 \u0641\u064A 15 \u0623\u0643\u062A\u0648\u0628\u0631 2026. \u0645\u0631\u062D\u0628\u0627\u064B \u0628\u0643\u0645 \u0641\u064A \u0642\u0627\u0639\u0629 \u0630\u0648 \u0631\u064A\u062F\u0627\u0646.",
-      type: "booking_confirmed",
-      bookingId: "bkg_1",
-      isRead: false,
-      createdAt: "2026-09-11T09:15:00Z"
-    },
-    {
-      id: "notif_2",
-      userId: "all_admin",
-      title: "\u0637\u0644\u0628 \u062D\u062C\u0632 \u062C\u062F\u064A\u062F",
-      message: "\u0642\u0627\u0645 \u0627\u0644\u0639\u0645\u064A\u0644 \u0633\u0627\u0645\u064A \u062D\u0645\u064A\u062F \u0627\u0644\u0645\u0637\u0647\u0631 \u0628\u062A\u0642\u062F\u064A\u0645 \u0637\u0644\u0628 \u062D\u062C\u0632 \u0644\u062D\u0641\u0644 \u062A\u062E\u0631\u062C \u0641\u064A \u062A\u0627\u0631\u064A\u062E 22 \u0623\u0643\u062A\u0648\u0628\u0631 2026.",
-      type: "booking_created",
-      bookingId: "bkg_2",
-      isRead: false,
-      createdAt: "2026-09-25T16:45:00Z"
-    }
-  ]
+  notifications: []
 };
-var pgPool = null;
-var isPgConnected = false;
+var globalWithPg = globalThis;
+var pgPool = globalWithPg._dhuraydanPgPool || null;
+var isPgConnected = Boolean(globalWithPg._dhuraydanPgConnected);
 var pgConnectionError = null;
-var dbUrl = (process.env.DATABASE_URL || "").trim();
+var rawDbUrl = (process.env.DATABASE_URL || "").trim();
+function getNeonPooledUrl(url) {
+  if (!url) return url;
+  if (url.includes(".neon.tech") && !url.includes("-pooler.")) {
+    return url.replace(".neon.tech", "-pooler.neon.tech");
+  }
+  return url;
+}
+var dbUrl = getNeonPooledUrl(rawDbUrl);
 var isValidPgUrl = dbUrl.startsWith("postgresql://") || dbUrl.startsWith("postgres://");
 var isLocalhost = dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1");
 var useSsl = !isLocalhost || dbUrl.includes("sslmode=require");
+var isVercelServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 var initPromise = null;
 async function ensureDbReady() {
   if (!pgPool) return false;
-  if (isPgConnected) return true;
+  if (isPgConnected && globalWithPg._dhuraydanPgTablesReady) return true;
   if (initPromise) return initPromise;
   initPromise = (async () => {
     try {
-      await pgPool.query("SELECT NOW()");
-      isPgConnected = true;
-      pgConnectionError = null;
-      console.log("[Dhu Raydan Database] Connected successfully to PostgreSQL.");
-      await initPgTables();
+      if (!isPgConnected) {
+        await pgPool.query("SELECT 1");
+        isPgConnected = true;
+        globalWithPg._dhuraydanPgConnected = true;
+        pgConnectionError = null;
+        console.log("[Dhu Raydan Database] Connected successfully to Neon PostgreSQL pooler.");
+      }
+      if (!globalWithPg._dhuraydanPgTablesReady) {
+        await initPgTables();
+        globalWithPg._dhuraydanPgTablesReady = true;
+      }
       return true;
     } catch (err) {
       isPgConnected = false;
+      globalWithPg._dhuraydanPgConnected = false;
       pgConnectionError = err.message || "PostgreSQL Connection Error";
       console.warn("[Dhu Raydan Database] PostgreSQL connection error:", err.message);
       return false;
@@ -570,13 +566,19 @@ async function ensureDbReady() {
 }
 if (isValidPgUrl && !dbUrl.includes("secure_password_here")) {
   try {
-    pgPool = new Pool({
-      connectionString: dbUrl,
-      ssl: useSsl ? { rejectUnauthorized: false } : false,
-      connectionTimeoutMillis: 1e4,
-      idleTimeoutMillis: 1e4,
-      max: process.env.VERCEL ? 3 : 10
-    });
+    if (!pgPool) {
+      pgPool = new Pool({
+        connectionString: dbUrl,
+        ssl: useSsl ? { rejectUnauthorized: false } : false,
+        connectionTimeoutMillis: 5e3,
+        idleTimeoutMillis: isVercelServerless ? 3e4 : 1e4,
+        max: isVercelServerless ? 2 : 10,
+        allowExitOnIdle: true,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 1e4
+      });
+      globalWithPg._dhuraydanPgPool = pgPool;
+    }
     ensureDbReady().catch((err) => {
       console.warn("[Dhu Raydan Database] Background PostgreSQL initialization warning:", err.message);
     });
@@ -605,6 +607,8 @@ async function initPgTables() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users (LOWER(email));
 
       CREATE TABLE IF NOT EXISTS hall_settings (
         id VARCHAR(32) PRIMARY KEY DEFAULT 'primary',
@@ -939,6 +943,21 @@ async function syncFromPg() {
         createdAt: r.created_at?.toISOString() || (/* @__PURE__ */ new Date()).toISOString()
       }));
     }
+    const notifsRes = await pgPool.query("SELECT * FROM notifications ORDER BY created_at DESC");
+    if (notifsRes.rows.length > 0) {
+      memStore.notifications = notifsRes.rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        title: r.title,
+        message: r.message,
+        type: r.type,
+        bookingId: r.booking_id,
+        isRead: Boolean(r.is_read),
+        createdAt: r.created_at?.toISOString() || (/* @__PURE__ */ new Date()).toISOString()
+      }));
+    } else {
+      memStore.notifications = [];
+    }
     console.log("[Dhu Raydan Database] In-memory cache synchronized with PostgreSQL.");
   } catch (err) {
     console.warn("[Dhu Raydan Database] Failed to sync data from PostgreSQL:", err.message);
@@ -970,6 +989,45 @@ async function dbFindUserByEmail(email) {
     }
   }
   return memStore.users.find((u) => u.email.toLowerCase() === normalized) || null;
+}
+async function dbFindUserByPhone(phone) {
+  const raw = (phone || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!raw && !digits) return null;
+  await ensureDbReady();
+  if (pgPool && isPgConnected) {
+    try {
+      const res = await pgPool.query(
+        `SELECT * FROM users
+         WHERE phone = $1
+            OR REPLACE(REPLACE(phone, ' ', ''), '-', '') = $2
+            OR (LENGTH($3) >= 7 AND RIGHT(REPLACE(REPLACE(phone, ' ', ''), '-', ''), 7) = RIGHT($3, 7))
+         LIMIT 1`,
+        [raw, raw.replace(/[\s-]/g, ""), digits]
+      );
+      if (res.rows.length > 0) {
+        const r = res.rows[0];
+        return {
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          phone: r.phone,
+          password: r.password_hash,
+          role: r.role,
+          permissions: r.permissions || [],
+          avatarUrl: r.avatar_url,
+          isActive: r.is_active,
+          createdAt: r.created_at?.toISOString() || (/* @__PURE__ */ new Date()).toISOString()
+        };
+      }
+    } catch (e) {
+      console.warn("[DB Error] dbFindUserByPhone query failed:", e.message);
+    }
+  }
+  return memStore.users.find((u) => {
+    const uDigits = (u.phone || "").replace(/\D/g, "");
+    return u.phone === raw || digits.length >= 7 && uDigits.endsWith(digits.slice(-7));
+  }) || null;
 }
 async function dbFindUserById(id) {
   await ensureDbReady();
@@ -1469,13 +1527,42 @@ apiRouter.post("/auth/register", async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
     if (!name || !email || !phone) {
-      return res.status(400).json({ error: "\u062C\u0645\u064A\u0639 \u0627\u0644\u062D\u0642\u0648\u0644 \u0645\u0637\u0644\u0648\u0628\u0629: \u0627\u0644\u0627\u0633\u0645\u060C \u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A\u060C \u0648\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641" });
-    }
-    const normalizedEmail = email.toLowerCase().trim();
-    const existing = await dbFindUserByEmail(normalizedEmail);
-    if (existing) {
       return res.status(400).json({
-        error: "\u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644. \u064A\u0631\u062C\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0628\u0631\u064A\u062F \u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A \u0622\u062E\u0631."
+        success: false,
+        error: "\u062C\u0645\u064A\u0639 \u0627\u0644\u062D\u0642\u0648\u0644 \u0645\u0637\u0644\u0648\u0628\u0629: \u0627\u0644\u0627\u0633\u0645\u060C \u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A\u060C \u0648\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641"
+      });
+    }
+    const normalizedEmail = (email || "").toLowerCase().trim();
+    const cleanPhone = (phone || "").trim();
+    const existingEmail = await dbFindUserByEmail(normalizedEmail);
+    const existingPhone = await dbFindUserByPhone(cleanPhone);
+    if (existingEmail && existingPhone && existingEmail.id === existingPhone.id) {
+      return res.status(409).json({
+        success: false,
+        error: "\u0644\u062F\u064A\u0643 \u062D\u0633\u0627\u0628 \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644\u060C \u0633\u064A\u062A\u0645 \u062A\u062D\u0648\u064A\u0644\u0643 \u0625\u0644\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644.",
+        message: "\u0644\u062F\u064A\u0643 \u062D\u0633\u0627\u0628 \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644\u060C \u0633\u064A\u062A\u0645 \u062A\u062D\u0648\u064A\u0644\u0643 \u0625\u0644\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644.",
+        code: "ACCOUNT_EXISTS",
+        email: existingEmail.email,
+        redirectToLogin: true
+      });
+    }
+    if (existingEmail) {
+      return res.status(409).json({
+        success: false,
+        error: "\u0647\u0630\u0627 \u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644\u060C \u064A\u0631\u062C\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644.",
+        message: "\u0647\u0630\u0627 \u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644\u060C \u064A\u0631\u062C\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644.",
+        code: "EMAIL_EXISTS",
+        email: existingEmail.email,
+        redirectToLogin: true
+      });
+    }
+    if (existingPhone) {
+      return res.status(409).json({
+        success: false,
+        error: "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644.",
+        message: "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644.",
+        code: "PHONE_EXISTS",
+        redirectToLogin: false
       });
     }
     const passwordHash = hashPassword(password || "user123456");
@@ -1484,24 +1571,42 @@ apiRouter.post("/auth/register", async (req, res) => {
       name: name.trim(),
       email: normalizedEmail,
       password: passwordHash,
-      phone: phone.trim(),
+      phone: cleanPhone,
       role: "CUSTOMER",
       permissions: [],
       isActive: true,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    await dbSaveUser(newUser);
+    try {
+      await dbSaveUser(newUser);
+    } catch (dbErr) {
+      if (dbErr.code === "23505" || dbErr.message?.includes("duplicate key") || dbErr.message?.includes("unique")) {
+        return res.status(409).json({
+          success: false,
+          error: "\u0647\u0630\u0627 \u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644\u060C \u064A\u0631\u062C\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644.",
+          message: "\u0647\u0630\u0627 \u0627\u0644\u0628\u0631\u064A\u062F \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A \u0645\u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644\u060C \u064A\u0631\u062C\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644.",
+          code: "EMAIL_EXISTS",
+          redirectToLogin: true
+        });
+      }
+      throw dbErr;
+    }
     memStore.users.push(newUser);
     const token = signAuthToken(newUser);
     memStore.sessions.set(token, newUser.id);
     memStore.sessions.set(`token_${newUser.id}`, newUser.id);
     res.setHeader("Set-Cookie", `rdn_auth_token=${token}; Path=/; SameSite=Lax; Max-Age=604800`);
     const { password: _, ...userSafe } = newUser;
-    res.status(201).json({ user: userSafe, token, success: true });
+    res.status(201).json({
+      success: true,
+      message: "\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628 \u0628\u0646\u062C\u0627\u062D",
+      user: userSafe,
+      token
+    });
   } catch (err) {
     console.error("[Register API Error]", err);
     const errorMsg = typeof err?.message === "string" && err.message !== "[object Object]" ? err.message : "\u0641\u0634\u0644 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628\u060C \u064A\u0631\u062C\u0649 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0635\u062D\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A";
-    res.status(500).json({ error: errorMsg });
+    res.status(500).json({ success: false, error: errorMsg });
   }
 });
 apiRouter.post("/auth/login", async (req, res) => {
@@ -1716,50 +1821,131 @@ apiRouter.post("/bookings", async (req, res) => {
   const user = req.user;
   const bookingData = req.body;
   if (!bookingData.eventDate || !bookingData.timeSlot || !bookingData.customerName || !bookingData.customerPhone) {
-    return res.status(400).json({ error: "\u062C\u0645\u064A\u0639 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u0627\u0633\u0628\u0629 \u0648\u0627\u0644\u0639\u0645\u064A\u0644 \u0645\u0637\u0644\u0648\u0628\u0629" });
+    return res.status(400).json({ success: false, error: "\u062C\u0645\u064A\u0639 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u0627\u0633\u0628\u0629 \u0648\u0627\u0644\u0639\u0645\u064A\u0644 \u0645\u0637\u0644\u0648\u0628\u0629" });
   }
   const conflict = memStore.bookings.find(
     (b) => b.status === "confirmed" && b.eventDate === bookingData.eventDate && (b.timeSlot === "full_day" || bookingData.timeSlot === "full_day" || b.timeSlot === bookingData.timeSlot)
   );
   if (conflict) {
     return res.status(409).json({
+      success: false,
       error: "\u0639\u0630\u0631\u0627\u064B\u060C \u0647\u0630\u0627 \u0627\u0644\u0645\u0648\u0639\u062F \u0645\u062D\u062C\u0648\u0632 \u0645\u0633\u0628\u0642\u0627\u064B \u0628\u0634\u0643\u0644 \u0645\u0624\u0643\u062F. \u064A\u0631\u062C\u0649 \u0627\u062E\u062A\u064A\u0627\u0631 \u062A\u0627\u0631\u064A\u062E \u0623\u0648 \u0641\u062A\u0631\u0629 \u0623\u062E\u0631\u0649.",
       conflictingBookingId: conflict.id
     });
+  }
+  let customerId;
+  let customerEmail = (bookingData.customerEmail || "").toLowerCase().trim();
+  if (user && user.id) {
+    customerId = user.id;
+    if (!customerEmail) customerEmail = (user.email || "").toLowerCase().trim();
+  } else {
+    let existingUser = customerEmail ? await dbFindUserByEmail(customerEmail) : null;
+    if (!existingUser && bookingData.customerPhone) {
+      existingUser = await dbFindUserByPhone(bookingData.customerPhone);
+    }
+    if (existingUser) {
+      customerId = existingUser.id;
+      if (!customerEmail) customerEmail = existingUser.email;
+    } else {
+      const newCustId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const autoEmail = customerEmail || `customer_${Date.now()}@dhuraydan.com`;
+      const newCust = {
+        id: newCustId,
+        name: bookingData.customerName.trim(),
+        email: autoEmail,
+        phone: bookingData.customerPhone.trim(),
+        password: hashPassword("user123456"),
+        role: "CUSTOMER",
+        permissions: [],
+        isActive: true,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await dbSaveUser(newCust);
+      memStore.users.push(newCust);
+      customerId = newCustId;
+      if (!customerEmail) customerEmail = autoEmail;
+    }
   }
   const count = memStore.bookings.length + 101;
   const newBooking = {
     ...bookingData,
     id: `bkg_${Date.now()}`,
     bookingCode: `RDN-2026-${count}`,
-    userId: user?.id || `usr_guest_${Date.now()}`,
-    customerId: user?.id || `usr_guest_${Date.now()}`,
+    userId: customerId,
+    customerId,
+    customerEmail,
     status: "pending",
     createdAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   memStore.bookings.unshift(newBooking);
   await dbSaveBooking(newBooking);
-  const notif = {
-    id: `notif_${Date.now()}`,
+  const adminNotif = {
+    id: `notif_${Date.now()}_admin`,
     userId: "all_admin",
     title: "\u0637\u0644\u0628 \u062D\u062C\u0632 \u062C\u062F\u064A\u062F \u0628\u0642\u0627\u0639\u0629 \u0630\u0648 \u0631\u064A\u062F\u0627\u0646",
-    message: `\u0642\u0627\u0645 \u0627\u0644\u0639\u0645\u064A\u0644 ${newBooking.customerName} \u0628\u0637\u0644\u0628 \u062D\u062C\u0632 \u062C\u062F\u064A\u062F \u0628\u062A\u0627\u0631\u064A\u062E ${newBooking.eventDate}.`,
+    message: `\u0642\u0627\u0645 \u0627\u0644\u0639\u0645\u064A\u0644 ${newBooking.customerName} \u0628\u0637\u0644\u0628 \u062D\u062C\u0632 \u062C\u062F\u064A\u062F \u0631\u0642\u0645 (${newBooking.bookingCode}) \u0628\u062A\u0627\u0631\u064A\u062E ${newBooking.eventDate}.`,
     type: "booking_created",
     bookingId: newBooking.id,
     isRead: false,
     createdAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  memStore.notifications.unshift(notif);
-  await dbSaveNotification(notif);
-  res.status(201).json(newBooking);
-});
-apiRouter.get("/notifications", (req, res) => {
-  const user = req.user;
-  if (!user) return res.json([]);
-  if (user.role === "ADMIN") {
-    return res.json(memStore.notifications.filter((n) => n.userId === "all_admin" || n.userId === user.id));
+  memStore.notifications.unshift(adminNotif);
+  await dbSaveNotification(adminNotif);
+  const custId = newBooking.customerId || newBooking.userId;
+  if (custId) {
+    const custNotif = {
+      id: `notif_${Date.now()}_cust`,
+      userId: custId,
+      title: "\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 \u0637\u0644\u0628 \u062D\u062C\u0632\u0643 \u0628\u0646\u062C\u0627\u062D!",
+      message: `\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 \u0637\u0644\u0628 \u062D\u062C\u0632\u0643 \u0631\u0642\u0645 (${newBooking.bookingCode}) \u0644\u0645\u0646\u0627\u0633\u0628\u0629 ${newBooking.eventType || "\u0627\u0644\u0642\u0627\u0639\u0629"} \u0641\u064A \u062A\u0627\u0631\u064A\u062E ${newBooking.eventDate}. \u0633\u0646\u0642\u0648\u0645 \u0628\u0645\u0631\u0627\u062C\u0639\u0629 \u0627\u0644\u0637\u0644\u0628 \u0648\u0627\u0644\u062A\u0648\u0627\u0635\u0644 \u0645\u0639\u0643.`,
+      type: "booking_created",
+      bookingId: newBooking.id,
+      isRead: false,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    memStore.notifications.unshift(custNotif);
+    await dbSaveNotification(custNotif);
   }
-  res.json(memStore.notifications.filter((n) => n.userId === user.id));
+  res.status(201).json({
+    success: true,
+    message: "\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u062D\u062C\u0632\u0643 \u0628\u0646\u062C\u0627\u062D.",
+    ...newBooking,
+    booking: newBooking
+  });
+});
+apiRouter.get("/notifications", async (req, res) => {
+  await ensureDbReady();
+  const user = req.user;
+  const queryUserId = typeof req.query.userId === "string" ? req.query.userId : null;
+  const queryIsAdmin = req.query.isAdmin === "true";
+  const effectiveUserId = user?.id || queryUserId;
+  const effectiveIsAdmin = user?.role === "ADMIN" || queryIsAdmin;
+  if (!effectiveUserId && !effectiveIsAdmin) {
+    return res.json([]);
+  }
+  const validNotifs = memStore.notifications.filter(
+    (n) => n.id !== "notif_1" && n.id !== "notif_2" && !(n.message && n.message.includes("\u0633\u0627\u0645\u064A"))
+  );
+  if (effectiveIsAdmin) {
+    return res.json(validNotifs.filter((n) => n.userId === "all_admin" || effectiveUserId && n.userId === effectiveUserId));
+  }
+  res.json(validNotifs.filter((n) => n.userId === effectiveUserId));
+});
+apiRouter.patch("/notifications/read-all", async (req, res) => {
+  await ensureDbReady();
+  const user = req.user;
+  const targetUserId = req.body?.userId || user?.id;
+  const isAdmin = req.body?.isAdmin === true || user?.role === "ADMIN";
+  for (const n of memStore.notifications) {
+    if (isAdmin && (n.userId === "all_admin" || n.userId === targetUserId)) {
+      n.isRead = true;
+      await dbMarkNotificationRead(n.id);
+    } else if (targetUserId && n.userId === targetUserId) {
+      n.isRead = true;
+      await dbMarkNotificationRead(n.id);
+    }
+  }
+  res.json({ success: true });
 });
 apiRouter.patch("/notifications/:id/read", async (req, res) => {
   const notif = memStore.notifications.find((n) => n.id === req.params.id);
