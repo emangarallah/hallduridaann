@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   Calendar,
   Phone,
@@ -14,37 +14,48 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { getHallSettings } from '../../services/api';
+import { useHallSettingsQuery } from '../../hooks/useHallDataQuery';
 import {
   useNotificationsQuery,
   useMarkNotificationReadOptimisticMutation
 } from '../../hooks/useCustomerBookingQuery';
 import { AppNotification, HallSettings } from '../../types';
 
-interface NavbarProps {
+export interface NavbarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
   openAuthModal: (tab?: 'login' | 'register') => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openAuthModal }) => {
+const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openAuthModal }) => {
   const { user, isAdmin, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [settings, setSettings] = useState<HallSettings | null>(null);
+  const [badgeDismissedLocally, setBadgeDismissedLocally] = useState(false);
+
+  // TanStack Query with staleTime (5 mins) for shared cached hall settings
+  const { data: settings } = useHallSettingsQuery();
 
   // TanStack Query for Live Notifications with automatic polling and cache management
   const { data: notifications = [] } = useNotificationsQuery(user?.id, isAdmin);
   const markReadMutation = useMarkNotificationReadOptimisticMutation();
 
-  useEffect(() => {
-    getHallSettings().then(setSettings);
+  const unreadCount = badgeDismissedLocally ? 0 : notifications.filter(n => !n.isRead).length;
+
+  const handleToggleNotifications = useCallback(() => {
+    setNotificationsOpen(prev => {
+      const next = !prev;
+      if (next) {
+        // Optimistic State Update: immediately zero out badge counter on clicking the bell icon
+        setBadgeDismissedLocally(true);
+      }
+      return next;
+    });
   }, []);
 
-  const unreadCount = notifications.filter(n => !n.isRead).length;
-
-  const handleNotificationClick = (notif: AppNotification) => {
+  const handleNotificationClick = useCallback((notif: AppNotification) => {
     // 1. Instantly update React Query Cache with onMutate (zeroes badge & dismisses in 0ms)
+    setBadgeDismissedLocally(true);
     markReadMutation.mutate(notif.id);
     setNotificationsOpen(false);
 
@@ -54,9 +65,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
     } else {
       setCurrentTab('account');
     }
-  };
+  }, [isAdmin, markReadMutation, setCurrentTab]);
 
-  const navLinks = [
+  const navLinks = useMemo(() => [
     { id: 'home', label: 'الرئيسية' },
     { id: 'about', label: 'عن القاعة' },
     { id: 'services', label: 'الخدمات' },
@@ -65,7 +76,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
     { id: 'booking', label: 'احجز القاعة', highlight: true },
     { id: 'reviews', label: 'التقييمات' },
     { id: 'contact', label: 'تواصل معنا' },
-  ];
+  ], []);
 
   return (
     <header className="sticky top-0 z-40 bg-[#0b0d13]/90 backdrop-blur-md border-b border-[#232a3b]">
@@ -183,8 +194,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
             {user && (
               <div className="relative">
                 <button
-                  onClick={() => setNotificationsOpen(!notificationsOpen)}
-                  className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-[#161c29] transition-colors relative"
+                  type="button"
+                  onClick={handleToggleNotifications}
+                  className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-[#161c29] transition-colors relative cursor-pointer"
                   title="الإشعارات"
                 >
                   <Bell className="w-5 h-5" />
@@ -328,9 +340,17 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
         </div>
       </div>
 
+      {/* Mobile Menu Backdrop */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-xs lg:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
       {/* Mobile Menu Drawer */}
       {mobileMenuOpen && (
-        <div className="lg:hidden bg-[#0d1017] border-b border-slate-800 px-4 pt-3 pb-6 space-y-2 animate-fadeIn">
+        <div className="lg:hidden relative z-40 bg-[#0d1017] border-b border-slate-800 px-4 pt-3 pb-6 space-y-2 animate-fadeIn">
           {navLinks.map((item) => (
             <button
               key={item.id}
@@ -338,7 +358,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
                 setCurrentTab(item.id);
                 setMobileMenuOpen(false);
               }}
-              className={`w-full text-right px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              className={`w-full text-right px-4 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
                 currentTab === item.id
                   ? 'bg-amber-500 text-black font-bold'
                   : 'text-slate-300 hover:bg-[#161c29]'
@@ -364,7 +384,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
                       logout();
                       setMobileMenuOpen(false);
                     }}
-                    className="px-2.5 py-1 text-red-400 bg-red-500/10 rounded hover:bg-red-500/20"
+                    className="px-2.5 py-1 text-red-400 bg-red-500/10 rounded hover:bg-red-500/20 cursor-pointer"
                   >
                     خروج
                   </button>
@@ -376,7 +396,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
                       setCurrentTab('admin');
                       setMobileMenuOpen(false);
                     }}
-                    className="w-full py-2.5 rounded-lg text-xs font-bold bg-amber-500 text-black flex items-center justify-center gap-1.5 shadow-md"
+                    className="w-full py-2.5 rounded-lg text-xs font-bold bg-amber-500 text-black flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
                   >
                     <Shield className="w-4 h-4" />
                     <span>لوحة تحكم الإدارة</span>
@@ -387,7 +407,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
                       setCurrentTab('account');
                       setMobileMenuOpen(false);
                     }}
-                    className="w-full py-2.5 rounded-lg text-xs font-semibold bg-[#181f30] text-slate-200 border border-slate-700 flex items-center justify-center gap-1.5"
+                    className="w-full py-2.5 rounded-lg text-xs font-semibold bg-[#181f30] text-slate-200 border border-slate-700 flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <UserIcon className="w-4 h-4 text-amber-400" />
                     <span>حسابي (العميل)</span>
@@ -438,3 +458,5 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
     </header>
   );
 };
+
+export const Navbar = React.memo(NavbarComponent);

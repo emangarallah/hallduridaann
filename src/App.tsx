@@ -19,6 +19,7 @@ import { AuthModal } from './components/modals/AuthModal';
 import { BookingDetailsModal } from './components/modals/BookingDetailsModal';
 import { LightboxModal } from './components/modals/LightboxModal';
 import { ReviewModal } from './components/modals/ReviewModal';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Booking,
   GalleryItem,
@@ -29,25 +30,31 @@ import {
   User
 } from './types';
 import {
-  getGallery,
-  getHallSettings,
-  getPackages,
-  getReviews,
-  getServices
-} from './services/api';
+  useHallSettingsQuery,
+  usePackagesQuery,
+  useServicesQuery,
+  useGalleryQuery,
+  useReviewsQuery
+} from './hooks/useHallDataQuery';
 
 function MainApp() {
+  const queryClient = useQueryClient();
   const { user, isAdmin, isLoading } = useAuth();
 
   // Navigation tab
   const [currentTab, setCurrentTab] = useState<string>('home');
 
-  // Shared Data
-  const [settings, setSettings] = useState<HallSettings | null>(null);
-  const [services, setServices] = useState<HallService[]>([]);
-  const [packages, setPackages] = useState<HallPackage[]>([]);
-  const [gallery, setGallery] = useState<GalleryItem[]>([]);
-  const [reviews, setReviews] = useState<Review[]>([]);
+  // Core essential data: Settings, Packages, Services cached with 5-min staleTime
+  const { data: settings = null } = useHallSettingsQuery();
+  const { data: packages = [] } = usePackagesQuery();
+  const { data: services = [] } = useServicesQuery();
+
+  // Lazy / On-Demand data: Gallery and Reviews loaded only when on their tabs or home screen
+  const isGalleryNeeded = currentTab === 'gallery' || currentTab === 'home';
+  const isReviewsNeeded = currentTab === 'reviews' || currentTab === 'home';
+
+  const { data: gallery = [] } = useGalleryQuery(isGalleryNeeded);
+  const { data: reviews = [] } = useReviewsQuery(isReviewsNeeded, true);
 
   // Modals state
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -65,29 +72,15 @@ function MainApp() {
   // Preselected package for booking wizard
   const [preselectedPackage, setPreselectedPackage] = useState<HallPackage | null>(null);
 
-  // Initial fetch
-  const refreshAllData = async () => {
-    try {
-      const [sett, srv, pkg, gal, rev] = await Promise.all([
-        getHallSettings(),
-        getServices(),
-        getPackages(),
-        getGallery(),
-        getReviews(true),
-      ]);
-      setSettings(sett);
-      setServices(srv);
-      setPackages(pkg);
-      setGallery(gal);
-      setReviews(rev);
-    } catch (err) {
-      console.error('Error fetching data:', err);
-    }
+  // Refetch / Invalidate all data when mutations occur
+  const refreshAllData = () => {
+    queryClient.invalidateQueries({ queryKey: ['packages'] });
+    queryClient.invalidateQueries({ queryKey: ['services'] });
+    queryClient.invalidateQueries({ queryKey: ['hallSettings'] });
+    queryClient.invalidateQueries({ queryKey: ['bookings'] });
+    if (isGalleryNeeded) queryClient.invalidateQueries({ queryKey: ['gallery'] });
+    if (isReviewsNeeded) queryClient.invalidateQueries({ queryKey: ['reviews'] });
   };
-
-  useEffect(() => {
-    refreshAllData();
-  }, []);
 
   // Synchronize with URL path and enforce strict route guards
   useEffect(() => {
