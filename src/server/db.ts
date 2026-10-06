@@ -115,28 +115,7 @@ export const memStore = {
   bookings: [...initialBookings],
   gallery: [...initialGallery],
   reviews: [...initialReviews],
-  notifications: [
-    {
-      id: 'notif_1',
-      userId: 'usr_customer_1',
-      title: 'تم تأكيد حجزك بنجاح!',
-      message: 'تم تأكيد حجزك رقم RDN-2026-101 لمناسبة الزفاف في 15 أكتوبر 2026. مرحباً بكم في قاعة ذو ريدان.',
-      type: 'booking_confirmed' as const,
-      bookingId: 'bkg_1',
-      isRead: false,
-      createdAt: '2026-09-11T09:15:00Z'
-    },
-    {
-      id: 'notif_2',
-      userId: 'all_admin',
-      title: 'طلب حجز جديد',
-      message: 'قام العميل سامي حميد المطهر بتقديم طلب حجز لحفل تخرج في تاريخ 22 أكتوبر 2026.',
-      type: 'booking_created' as const,
-      bookingId: 'bkg_2',
-      isRead: false,
-      createdAt: '2026-09-25T16:45:00Z'
-    }
-  ] as AppNotification[]
+  notifications: [] as AppNotification[]
 };
 
 // PostgreSQL Connection Pool Setup
@@ -606,6 +585,23 @@ async function syncFromPg() {
         source: r.source,
         createdAt: r.created_at?.toISOString() || new Date().toISOString()
       }));
+    }
+
+    // 8. Notifications
+    const notifsRes = await pgPool.query('SELECT * FROM notifications ORDER BY created_at DESC');
+    if (notifsRes.rows.length > 0) {
+      memStore.notifications = notifsRes.rows.map(r => ({
+        id: r.id,
+        userId: r.user_id,
+        title: r.title,
+        message: r.message,
+        type: r.type,
+        bookingId: r.booking_id,
+        isRead: Boolean(r.is_read),
+        createdAt: r.created_at?.toISOString() || new Date().toISOString()
+      }));
+    } else {
+      memStore.notifications = [];
     }
 
     console.log('[Dhu Raydan Database] In-memory cache synchronized with PostgreSQL.');

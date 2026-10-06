@@ -44,7 +44,8 @@ import {
   HallService,
   HallSettings,
   Review,
-  User
+  User,
+  AppNotification
 } from '../../types';
 import {
   createGalleryItem,
@@ -62,6 +63,9 @@ import {
   getReviews,
   getServices,
   getUsers,
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
   toggleReviewApproval,
   toggleUserStatus,
   updateUserRole,
@@ -174,9 +178,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [settingsForm, setSettingsForm] = useState<HallSettings | null>(null);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
+  // Admin Live Notifications state
+  const [adminNotifications, setAdminNotifications] = useState<AppNotification[]>([]);
+  const [adminNotifsOpen, setAdminNotifsOpen] = useState(false);
+
   useEffect(() => {
     loadAllData();
   }, []);
+
+  // Requirement: Live Polling for Admin Notifications every 5 seconds without page reload
+  useEffect(() => {
+    const fetchAdminNotifs = async () => {
+      try {
+        const notifs = await getNotifications(user?.id || 'admin', true);
+        setAdminNotifications(notifs);
+        // Refresh bookings and stats in background to keep calendar and counters up to date
+        const bData = await getBookings();
+        setBookings(bData);
+        const sData = await getDashboardStats();
+        setStats(sData);
+      } catch {
+        // silent
+      }
+    };
+
+    fetchAdminNotifs();
+    const interval = setInterval(fetchAdminNotifs, 5000);
+
+    const handleSync = () => fetchAdminNotifs();
+    window.addEventListener('dhuraydan:notif-update', handleSync);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('dhuraydan:notif-update', handleSync);
+    };
+  }, [user]);
+
+  const unreadAdminCount = adminNotifications.filter((n) => !n.isRead).length;
+
+  const handleAdminNotifClick = async (notif: AppNotification) => {
+    // 1. Immediately hide notification completely from the popup
+    setAdminNotifications((prev) => prev.filter((n) => n.id !== notif.id));
+    setAdminNotifsOpen(false);
+
+    // 2. Mark as read on server & cache
+    await markNotificationRead(notif.id);
+
+    // 3. Open booking details if applicable
+    if (notif.bookingId) {
+      const targetBooking = bookings.find((b) => b.id === notif.bookingId);
+      if (targetBooking) {
+        onOpenBookingDetails(targetBooking);
+      } else {
+        setAdminTab('bookings');
+      }
+    }
+  };
+
+  const handleMarkAllAdminNotifsRead = async () => {
+    await markAllNotificationsRead(user?.id || '', true);
+    setAdminNotifications([]);
+    setAdminNotifsOpen(false);
+  };
 
   const loadAllData = async () => {
     setLoading(true);
@@ -409,6 +472,93 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // Export Bookings Table to CSV
+  const handleExportBookingsCSV = () => {
+    try {
+      if (filteredBookings.length === 0) {
+        alert('لا توجد حجوزات متطابقة مع التصفية الحالية للتصدير');
+        return;
+      }
+
+      const headers = [
+        'كود الحجز',
+        'اسم العميل',
+        'رقم الهاتف',
+        'البريد الإلكتروني',
+        'تاريخ المناسبة',
+        'الفترة',
+        'قسم القاعة',
+        'نوع المناسبة',
+        'الباقة المختارة',
+        'عدد الضيوف',
+        'السعر الإجمالي (ريال)',
+        'المبلغ المدفوع (ريال)',
+        'الحالة',
+        'تاريخ تقديم الطلب'
+      ];
+
+      const rows = filteredBookings.map((b) => {
+        const slotText =
+          b.timeSlot === 'evening'
+            ? 'مسائية'
+            : b.timeSlot === 'morning'
+            ? 'صباحية'
+            : 'يوم كامل';
+
+        const sectionText =
+          b.hallSection === 'men'
+            ? 'رجال'
+            : b.hallSection === 'women'
+            ? 'نساء'
+            : 'رجال ونساء (القاعة كاملة)';
+
+        const statusText =
+          b.status === 'confirmed'
+            ? 'مؤكد'
+            : b.status === 'pending'
+            ? 'قيد الانتظار'
+            : b.status === 'completed'
+            ? 'مكتمل'
+            : 'ملغي / مرفوض';
+
+        return [
+          `"${(b.bookingCode || '').replace(/"/g, '""')}"`,
+          `"${(b.customerName || '').replace(/"/g, '""')}"`,
+          `"${(b.customerPhone || '').replace(/"/g, '""')}"`,
+          `"${(b.customerEmail || '').replace(/"/g, '""')}"`,
+          `"${(b.eventDate || '').replace(/"/g, '""')}"`,
+          `"${slotText}"`,
+          `"${sectionText}"`,
+          `"${(b.eventType || '').replace(/"/g, '""')}"`,
+          `"${(b.packageName || 'أساسية').replace(/"/g, '""')}"`,
+          `"${b.guestCount || '-'}"`,
+          `"${Number(b.totalPrice || 0)}"`,
+          `"${Number(b.paidAmount || 0)}"`,
+          `"${statusText}"`,
+          `"${(b.createdAt || '').slice(0, 10)}"`
+        ].join(',');
+      });
+
+      // UTF-8 BOM (\uFEFF) for Arabic character support in Excel and Google Sheets
+      const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute(
+        'download',
+        `DhuRaydan_Bookings_${new Date().toISOString().slice(0, 10)}.csv`
+      );
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('Failed to export CSV:', err);
+      alert('حدث خطأ أثناء تصدير ملف CSV: ' + (err?.message || ''));
+    }
+  };
+
   const sidebarItems = [
     { id: 'overview', label: 'لوحة الإحصائيات', icon: LayoutDashboard },
     { id: 'bookings', label: 'إدارة الحجوزات', icon: CalendarCheck, badge: stats?.pendingBookings },
@@ -514,6 +664,115 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Main Admin Content */}
       <main className="flex-1 p-4 sm:p-8 overflow-y-auto">
+
+        {/* Top Header with Notifications Bar & Live Polling Status */}
+        <div className="mb-6 pb-4 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base sm:text-lg font-bold text-white font-serif-ar">
+                  لوحة تحكم إدارة قاعة ذو ريدان
+                </h1>
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[10px] text-emerald-400 font-mono">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>تحديث تلقائي مفعّل (Live Polling)</span>
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                مرحباً بك {user?.name || 'مدير النظام'} • إدارة الحجوزات والعملاء والخدمات والتقارير
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Header Actions: Notification Bell with Red Alert Icon */}
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                onClick={() => setAdminNotifsOpen(!adminNotifsOpen)}
+                className={`relative px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all ${
+                  unreadAdminCount > 0
+                    ? 'bg-red-500/15 border-red-500/50 text-red-400 hover:bg-red-500/25 shadow-lg shadow-red-500/10'
+                    : 'bg-[#121622] border-slate-800 text-slate-300 hover:text-white hover:bg-[#1a2030]'
+                }`}
+                title="إشعارات الحجوزات الجديدة (تحديث تلقائي)"
+              >
+                <div className="relative">
+                  <Bell className={`w-4 h-4 ${unreadAdminCount > 0 ? 'text-red-400 animate-bounce' : 'text-amber-400'}`} />
+                  {unreadAdminCount > 0 && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping"></span>
+                  )}
+                </div>
+                <span>الإشعارات</span>
+                {unreadAdminCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black">
+                    {unreadAdminCount} طلب جديد
+                  </span>
+                )}
+              </button>
+
+              {/* Admin Notifications Dropdown */}
+              {adminNotifsOpen && (
+                <div className="absolute left-0 mt-2 w-80 sm:w-96 bg-[#121622] rounded-2xl border border-slate-800 shadow-2xl z-50 overflow-hidden animate-fadeIn">
+                  <div className="p-3.5 bg-[#171c2c] border-b border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs font-bold text-white">إشعارات الحجوزات الجديدة</span>
+                    </div>
+                    {unreadAdminCount > 0 && (
+                      <button
+                        onClick={handleMarkAllAdminNotifsRead}
+                        className="text-[10px] text-amber-400 hover:underline cursor-pointer"
+                      >
+                        تحديد الكل كمقروء
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/60">
+                    {adminNotifications.length === 0 ? (
+                      <div className="p-8 text-center text-xs text-slate-400">
+                        لا توجد إشعارات حالياً. ستظهر هنا إشعارات الحجوزات الجديدة تلقائياً.
+                      </div>
+                    ) : (
+                      adminNotifications.map((notif) => (
+                        <div
+                          key={notif.id}
+                          onClick={() => handleAdminNotifClick(notif)}
+                          className={`p-3.5 cursor-pointer transition-colors hover:bg-[#181f30] ${
+                            !notif.isRead ? 'bg-amber-500/10' : ''
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                              {!notif.isRead && (
+                                <span className="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+                              )}
+                              <span>{notif.title}</span>
+                            </h4>
+                            <span className="text-[10px] text-slate-500 shrink-0">
+                              {new Date(notif.createdAt).toLocaleDateString('ar-YE', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                            {notif.message}
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
         
         {/* TAB 1: OVERVIEW & STATS */}
         {adminTab === 'overview' && (
@@ -675,11 +934,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
                 <button
                   onClick={handleExportBookingsPDF}
-                  className="px-4 py-2 rounded-xl bg-[#161c2b] hover:bg-[#1e263a] text-amber-300 border border-amber-500/30 text-xs font-bold shadow flex items-center gap-1.5 transition-all"
+                  className="px-3.5 py-2 rounded-xl bg-[#161c2b] hover:bg-[#1e263a] text-amber-300 border border-amber-500/30 text-xs font-bold shadow flex items-center gap-1.5 transition-all"
                   title="تصدير جدول الحجوزات الحالي إلى ملف PDF رسمي"
                 >
                   <Download className="w-4 h-4 text-amber-400" />
-                  <span>تصدير تقرير (PDF)</span>
+                  <span>تصدير (PDF)</span>
+                </button>
+
+                <button
+                  onClick={handleExportBookingsCSV}
+                  className="px-3.5 py-2 rounded-xl bg-[#161c2b] hover:bg-[#1e263a] text-emerald-300 border border-emerald-500/30 text-xs font-bold shadow flex items-center gap-1.5 transition-all"
+                  title="تصدير بيانات جدول الحجوزات إلى ملف إكسل CSV"
+                >
+                  <FileText className="w-4 h-4 text-emerald-400" />
+                  <span>تصدير (CSV)</span>
                 </button>
 
                 <button

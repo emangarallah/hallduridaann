@@ -62,28 +62,17 @@ export function initStore() {
   getLocal(GALLERY_KEY, initialGallery);
   getLocal(REVIEWS_KEY, initialReviews);
   getLocal(USERS_KEY, initialUsers);
-  getLocal(NOTIFICATIONS_KEY, [
-    {
-      id: 'notif_1',
-      userId: 'usr_customer_1',
-      title: 'تم تأكيد حجزك بنجاح!',
-      message: 'تم تأكيد حجزك رقم RDN-2026-101 لمناسبة الزفاف في 15 أكتوبر 2026. مرحباً بكم في قاعة ذو ريدان.',
-      type: 'booking_confirmed',
-      bookingId: 'bkg_1',
-      isRead: false,
-      createdAt: '2026-09-11T09:15:00Z'
-    },
-    {
-      id: 'notif_2',
-      userId: 'all_admin',
-      title: 'طلب حجز جديد',
-      message: 'قام العميل سامي حميد المطهر بتقديم طلب حجز لحفل تخرج في تاريخ 22 أكتوبر 2026.',
-      type: 'booking_created',
-      bookingId: 'bkg_2',
-      isRead: false,
-      createdAt: '2026-09-25T16:45:00Z'
-    }
-  ] as AppNotification[]);
+  
+  // Clean out any legacy mock notifications of Sami
+  try {
+    const cachedNotifs = getLocal<AppNotification[]>(NOTIFICATIONS_KEY, []);
+    const cleanNotifs = cachedNotifs.filter(
+      (n) => n.id !== 'notif_1' && n.id !== 'notif_2' && !(n.message && n.message.includes('سامي'))
+    );
+    setLocal(NOTIFICATIONS_KEY, cleanNotifs);
+  } catch {
+    setLocal(NOTIFICATIONS_KEY, []);
+  }
 }
 
 initStore();
@@ -626,22 +615,61 @@ export async function updateUserRole(id: string, role: 'ADMIN' | 'CUSTOMER'): Pr
 }
 
 // --- Notifications API ---
+const DISMISSED_NOTIFS_KEY = 'rdn_dismissed_notification_ids';
+
+export function getDismissedNotificationIds(): Set<string> {
+  const ids = getLocal<string[]>(DISMISSED_NOTIFS_KEY, []);
+  return new Set(ids);
+}
+
+export function dismissNotificationId(id: string): void {
+  const ids = getLocal<string[]>(DISMISSED_NOTIFS_KEY, []);
+  if (!ids.includes(id)) {
+    ids.push(id);
+    setLocal(DISMISSED_NOTIFS_KEY, ids);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('dhuraydan:notif-update', { detail: { id } }));
+  }
+}
+
 export async function getNotifications(userId: string, isAdmin = false): Promise<AppNotification[]> {
+  const dismissedSet = getDismissedNotificationIds();
   try {
-    const res = await fetchApi('/api/notifications');
+    const query = new URLSearchParams({
+      ...(userId ? { userId } : {}),
+      ...(isAdmin ? { isAdmin: 'true' } : {})
+    });
+    const res = await fetchApi(`/api/notifications?${query.toString()}`);
     if (res.ok) {
-      const data = await res.json();
-      setLocal(NOTIFICATIONS_KEY, data);
-      return data;
+      const data: AppNotification[] = await res.json();
+      const sanitized = data.filter(
+        (n) =>
+          n.id !== 'notif_1' &&
+          n.id !== 'notif_2' &&
+          !(n.message && n.message.includes('سامي')) &&
+          !n.isRead &&
+          !dismissedSet.has(n.id)
+      );
+      setLocal(NOTIFICATIONS_KEY, sanitized);
+      return sanitized;
     }
   } catch (e) {
     console.warn('[API] notifications failed:', e);
   }
   const list = getLocal<AppNotification[]>(NOTIFICATIONS_KEY, []);
+  const sanitizedList = list.filter(
+    (n) =>
+      n.id !== 'notif_1' &&
+      n.id !== 'notif_2' &&
+      !(n.message && n.message.includes('سامي')) &&
+      !n.isRead &&
+      !dismissedSet.has(n.id)
+  );
   if (isAdmin) {
-    return list.filter(n => n.userId === 'all_admin' || n.userId === userId);
+    return sanitizedList.filter(n => n.userId === 'all_admin' || n.userId === userId);
   }
-  return list.filter(n => n.userId === userId);
+  return sanitizedList.filter(n => n.userId === userId);
 }
 
 export async function addNotification(data: Omit<AppNotification, 'id' | 'isRead' | 'createdAt'>): Promise<AppNotification> {
@@ -658,27 +686,39 @@ export async function addNotification(data: Omit<AppNotification, 'id' | 'isRead
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
+  dismissNotificationId(id);
   try {
     await fetchApi(`/api/notifications/${id}/read`, { method: 'PATCH' });
   } catch {}
   const list = getLocal<AppNotification[]>(NOTIFICATIONS_KEY, []);
-  const index = list.findIndex(n => n.id === id);
-  if (index !== -1) {
-    list[index].isRead = true;
-    setLocal(NOTIFICATIONS_KEY, list);
-  }
+  const updated = list.map(n => n.id === id ? { ...n, isRead: true } : n).filter(n => n.id !== id);
+  setLocal(NOTIFICATIONS_KEY, updated);
 }
 
 export async function markAllNotificationsRead(userId: string, isAdmin = false): Promise<void> {
+  try {
+    await fetchApi('/api/notifications/read-all', {
+      method: 'PATCH',
+      body: JSON.stringify({ userId, isAdmin })
+    });
+  } catch {}
   const list = getLocal<AppNotification[]>(NOTIFICATIONS_KEY, []);
+  const toDismiss: string[] = [];
   list.forEach(n => {
     if (isAdmin && (n.userId === 'all_admin' || n.userId === userId)) {
       n.isRead = true;
+      toDismiss.push(n.id);
     } else if (n.userId === userId) {
       n.isRead = true;
+      toDismiss.push(n.id);
     }
   });
-  setLocal(NOTIFICATIONS_KEY, list);
+  toDismiss.forEach(id => dismissNotificationId(id));
+  const remaining = list.filter(n => !n.isRead && !toDismiss.includes(n.id));
+  setLocal(NOTIFICATIONS_KEY, remaining);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('dhuraydan:notif-update'));
+  }
 }
 
 // --- Dashboard Statistics ---

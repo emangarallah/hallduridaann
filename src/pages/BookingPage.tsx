@@ -27,6 +27,7 @@ import {
 } from '../types';
 import { checkBookingConflict, createBooking, getBookings } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
 interface BookingPageProps {
   packages: HallPackage[];
@@ -48,6 +49,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({
   onBookingCreated,
 }) => {
   const { user } = useAuth();
+  const { showSuccess, showError } = useToast();
 
   // Wizard Steps: 1: Event & Date, 2: Package & Services, 3: Contact & Review, 4: Success
   const [currentStep, setCurrentStep] = useState(1);
@@ -209,6 +211,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({
 
       setCreatedBooking(newBkg);
       setCurrentStep(4);
+      showSuccess('تم تسجيل حجزك بنجاح.');
       if (onBookingCreated) onBookingCreated(newBkg);
 
       // Trigger Confetti Celebration!
@@ -222,7 +225,9 @@ export const BookingPage: React.FC<BookingPageProps> = ({
         // ignore
       }
     } catch (err: any) {
-      setSubmitError(err.message || 'حدث خطأ أثناء إرسال طلب الحجز');
+      const errMsg = err.message || 'حدث خطأ أثناء إرسال طلب الحجز';
+      setSubmitError(errMsg);
+      showError(errMsg);
     } finally {
       setIsSubmitting(false);
     }

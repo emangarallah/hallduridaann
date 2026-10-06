@@ -781,19 +781,36 @@ apiRouter.post('/bookings', async (req, res) => {
   memStore.bookings.unshift(newBooking);
   await dbSaveBooking(newBooking);
 
-  // Notify Admins
-  const notif: AppNotification = {
-    id: `notif_${Date.now()}`,
+  // 1. Notify Admins
+  const adminNotif: AppNotification = {
+    id: `notif_${Date.now()}_admin`,
     userId: 'all_admin',
     title: 'طلب حجز جديد بقاعة ذو ريدان',
-    message: `قام العميل ${newBooking.customerName} بطلب حجز جديد بتاريخ ${newBooking.eventDate}.`,
+    message: `قام العميل ${newBooking.customerName} بطلب حجز جديد رقم (${newBooking.bookingCode}) بتاريخ ${newBooking.eventDate}.`,
     type: 'booking_created',
     bookingId: newBooking.id,
     isRead: false,
     createdAt: new Date().toISOString()
   };
-  memStore.notifications.unshift(notif);
-  await dbSaveNotification(notif);
+  memStore.notifications.unshift(adminNotif);
+  await dbSaveNotification(adminNotif);
+
+  // 2. Notify Customer
+  const custId = newBooking.customerId || newBooking.userId;
+  if (custId) {
+    const custNotif: AppNotification = {
+      id: `notif_${Date.now()}_cust`,
+      userId: custId,
+      title: 'تم استلام طلب حجزك بنجاح!',
+      message: `تم استلام طلب حجزك رقم (${newBooking.bookingCode}) لمناسبة ${newBooking.eventType || 'القاعة'} في تاريخ ${newBooking.eventDate}. سنقوم بمراجعة الطلب والتواصل معك.`,
+      type: 'booking_created',
+      bookingId: newBooking.id,
+      isRead: false,
+      createdAt: new Date().toISOString()
+    };
+    memStore.notifications.unshift(custNotif);
+    await dbSaveNotification(custNotif);
+  }
 
   res.status(201).json({
     success: true,
@@ -804,13 +821,47 @@ apiRouter.post('/bookings', async (req, res) => {
 });
 
 // Notifications
-apiRouter.get('/notifications', (req, res) => {
+apiRouter.get('/notifications', async (req, res) => {
+  await ensureDbReady();
   const user = (req as any).user;
-  if (!user) return res.json([]);
-  if (user.role === 'ADMIN') {
-    return res.json(memStore.notifications.filter(n => n.userId === 'all_admin' || n.userId === user.id));
+  const queryUserId = typeof req.query.userId === 'string' ? req.query.userId : null;
+  const queryIsAdmin = req.query.isAdmin === 'true';
+
+  const effectiveUserId = user?.id || queryUserId;
+  const effectiveIsAdmin = user?.role === 'ADMIN' || queryIsAdmin;
+
+  if (!effectiveUserId && !effectiveIsAdmin) {
+    return res.json([]);
   }
-  res.json(memStore.notifications.filter(n => n.userId === user.id));
+
+  // Filter out any legacy mock notifications containing Sami
+  const validNotifs = memStore.notifications.filter(
+    n => n.id !== 'notif_1' && n.id !== 'notif_2' && !(n.message && n.message.includes('سامي'))
+  );
+
+  if (effectiveIsAdmin) {
+    return res.json(validNotifs.filter(n => n.userId === 'all_admin' || (effectiveUserId && n.userId === effectiveUserId)));
+  }
+
+  res.json(validNotifs.filter(n => n.userId === effectiveUserId));
+});
+
+apiRouter.patch('/notifications/read-all', async (req, res) => {
+  await ensureDbReady();
+  const user = (req as any).user;
+  const targetUserId = req.body?.userId || user?.id;
+  const isAdmin = req.body?.isAdmin === true || user?.role === 'ADMIN';
+
+  for (const n of memStore.notifications) {
+    if (isAdmin && (n.userId === 'all_admin' || n.userId === targetUserId)) {
+      n.isRead = true;
+      await dbMarkNotificationRead(n.id);
+    } else if (targetUserId && n.userId === targetUserId) {
+      n.isRead = true;
+      await dbMarkNotificationRead(n.id);
+    }
+  }
+  res.json({ success: true });
 });
 
 apiRouter.patch('/notifications/:id/read', async (req, res) => {

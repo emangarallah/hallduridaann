@@ -56,6 +56,14 @@ export const AccountPage: React.FC<AccountPageProps> = ({
       setName(user.name);
       setPhone(user.phone);
       fetchUserData();
+
+      const handleSync = () => {
+        getNotifications(user.id, user.role === 'ADMIN')
+          .then(setNotifications)
+          .catch(() => {});
+      };
+      window.addEventListener('dhuraydan:notif-update', handleSync);
+      return () => window.removeEventListener('dhuraydan:notif-update', handleSync);
     }
   }, [user]);
 
@@ -64,7 +72,14 @@ export const AccountPage: React.FC<AccountPageProps> = ({
     setLoading(true);
     try {
       const allBookings = await getBookings();
-      setBookings(allBookings.filter((b) => b.userId === user.id));
+      setBookings(
+        allBookings.filter(
+          (b) =>
+            b.userId === user.id ||
+            b.customerId === user.id ||
+            (b.customerEmail && b.customerEmail.toLowerCase() === user.email.toLowerCase())
+        )
+      );
       const notifs = await getNotifications(user.id, user.role === 'ADMIN');
       setNotifications(notifs);
     } finally {
@@ -90,10 +105,12 @@ export const AccountPage: React.FC<AccountPageProps> = ({
   };
 
   const handleNotificationClick = async (notif: AppNotification) => {
+    // 1. Immediately hide and dismiss notification
+    setNotifications((prev) => prev.filter((n) => n.id !== notif.id));
+
+    // 2. Mark as read on server & cache
     await markNotificationRead(notif.id);
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === notif.id ? { ...n, isRead: true } : n))
-    );
+
     if (notif.bookingId) {
       const b = bookings.find((x) => x.id === notif.bookingId);
       if (b) onOpenBookingDetails(b);
@@ -103,7 +120,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({
   const handleMarkAllRead = async () => {
     if (!user) return;
     await markAllNotificationsRead(user.id, user.role === 'ADMIN');
-    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setNotifications([]);
   };
 
   if (!user) {

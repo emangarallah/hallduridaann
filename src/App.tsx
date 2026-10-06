@@ -51,10 +51,16 @@ function MainApp() {
 
   // Modals state
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalInitialTab, setAuthModalInitialTab] = useState<'login' | 'register'>('login');
   const [activeBookingDetails, setActiveBookingDetails] = useState<Booking | null>(null);
   const [lightboxItem, setLightboxItem] = useState<GalleryItem | null>(null);
   const [reviewBooking, setReviewBooking] = useState<Booking | null>(null);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+
+  const handleOpenAuthModal = (tab: 'login' | 'register' = 'login') => {
+    setAuthModalInitialTab(tab);
+    setAuthModalOpen(true);
+  };
 
   // Preselected package for booking wizard
   const [preselectedPackage, setPreselectedPackage] = useState<HallPackage | null>(null);
@@ -109,10 +115,16 @@ function MainApp() {
       }
     } else if (path === '/403') {
       setCurrentTab('403');
+    } else if (path === '/login') {
+      setCurrentTab('home');
+      handleOpenAuthModal('login');
+    } else if (path === '/register') {
+      setCurrentTab('home');
+      handleOpenAuthModal('register');
     } else if (path === '/account') {
       if (!user) {
         setCurrentTab('home');
-        setAuthModalOpen(true);
+        handleOpenAuthModal('login');
       } else {
         setCurrentTab('account');
       }
@@ -247,7 +259,7 @@ function MainApp() {
       return (
         <Forbidden403Page
           setCurrentTab={navigate}
-          openAuthModal={() => setAuthModalOpen(true)}
+          openAuthModal={() => handleOpenAuthModal('login')}
         />
       );
     }
@@ -286,7 +298,7 @@ function MainApp() {
         return (
           <Forbidden403Page
             setCurrentTab={navigate}
-            openAuthModal={() => setAuthModalOpen(true)}
+            openAuthModal={() => handleOpenAuthModal('login')}
           />
         );
       }
@@ -351,7 +363,7 @@ function MainApp() {
             settings={settings}
             preselectedPackage={preselectedPackage}
             setCurrentTab={navigate}
-            openAuthModal={() => setAuthModalOpen(true)}
+            openAuthModal={() => handleOpenAuthModal('login')}
             onBookingCreated={() => refreshAllData()}
           />
         );
@@ -361,7 +373,7 @@ function MainApp() {
             reviews={reviews}
             settings={settings}
             onOpenReviewModal={() => handleOpenReviewModal()}
-            openAuthModal={() => setAuthModalOpen(true)}
+            openAuthModal={() => handleOpenAuthModal('login')}
           />
         );
       case 'contact':
@@ -372,7 +384,7 @@ function MainApp() {
             onOpenBookingDetails={(b) => setActiveBookingDetails(b)}
             onOpenReviewModal={(b) => handleOpenReviewModal(b)}
             setCurrentTab={navigate}
-            openAuthModal={() => setAuthModalOpen(true)}
+            openAuthModal={() => handleOpenAuthModal('login')}
           />
         );
       default:
@@ -397,7 +409,7 @@ function MainApp() {
       <Navbar
         currentTab={currentTab}
         setCurrentTab={navigate}
-        openAuthModal={() => setAuthModalOpen(true)}
+        openAuthModal={handleOpenAuthModal}
       />
 
       {/* Main View Area */}
@@ -416,6 +428,7 @@ function MainApp() {
       {/* Modals */}
       <AuthModal
         isOpen={authModalOpen}
+        initialTab={authModalInitialTab}
         onClose={() => setAuthModalOpen(false)}
         onOpenAdminLogin={() => {
           setAuthModalOpen(false);

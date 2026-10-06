@@ -97,6 +97,7 @@ export interface Booking {
   packagePrice: number;
   addons: BookingAddon[];
   totalPrice: number;
+  paidAmount?: number;
   status: BookingStatus;
   notes?: string;
   adminNotes?: string;

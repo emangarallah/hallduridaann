@@ -74,7 +74,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       });
 
       setAuthUser(data.user, data.token);
-      showSuccess(`مرحباً بك مجدداً، ${data.user.name}`);
+      // Fast welcome toast that disappears quickly in 1.5s
+      showSuccess(`مرحباً بك مجدداً، ${data.user.name}`, 1500);
       onClose();
       if (onSuccess) onSuccess(data.user);
     } catch (err: any) {
@@ -95,21 +96,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (regPass.length < 6) throw new Error('كلمة المرور يجب أن لا تقل عن 6 أحرف أو أرقام');
       if (regPass !== regPassConfirm) throw new Error('كلمة المرور وتأكيدها غير متطابقين');
 
-      const data = await registerMutation.mutateAsync({
+      await registerMutation.mutateAsync({
         name: regName.trim(),
         email: regEmail.trim(),
         phone: regPhone.trim(),
         password: regPass
       });
 
-      // Update AuthContext state
-      setAuthUser(data.user, data.token);
-
-      // Requirement 5: Success toast notification
-      showSuccess('تم إنشاء حسابك بنجاح.');
-
-      onClose();
-      if (onSuccess) onSuccess(data.user);
+      // Quick toast notification (2s) and immediately transfer to login tab
+      showSuccess('تم إنشاء حسابك بنجاح! تفضل بتسجيل الدخول.', 2000);
+      setTab('login');
+      setLoginEmail(regEmail.trim());
+      setLoginPass('');
+      setRegPass('');
+      setRegPassConfirm('');
+      window.history.pushState(null, '', '/login');
     } catch (err: any) {
       const code = err?.code;
       const returnedEmail = err?.email || regEmail.trim();
@@ -294,6 +295,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {loginMutation.isPending ? 'جاري التحقق وتسجيل الدخول...' : 'تسجيل الدخول'}
             </button>
 
+            {/* Instant single-click switch to Register */}
+            <div className="text-center pt-1 pb-1">
+              <span className="text-xs text-slate-400">ليس لديك حساب بعد؟ </span>
+              <button
+                type="button"
+                onClick={() => { setTab('register'); setError(''); }}
+                className="text-xs font-bold text-amber-400 hover:text-amber-300 hover:underline cursor-pointer transition-colors"
+              >
+                إنشاء حساب جديد فوراً ←
+              </button>
+            </div>
+
             {/* Clear Admin Login Button (Requirement 2) */}
             <div className="pt-4 border-t border-slate-800 text-center space-y-2">
               <p className="text-[11px] text-slate-400">هل أنت من طاقم إدارة القاعة؟</p>
@@ -407,6 +420,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             >
               {registerMutation.isPending ? 'جاري إنشاء الحساب في السيرفر...' : 'تأكيد وإنشاء الحساب'}
             </button>
+
+            {/* Instant single-click switch to Login */}
+            <div className="text-center pt-1 pb-1">
+              <span className="text-xs text-slate-400">لديك حساب مسجل بالفعل؟ </span>
+              <button
+                type="button"
+                onClick={() => { setTab('login'); setError(''); }}
+                className="text-xs font-bold text-amber-400 hover:text-amber-300 hover:underline cursor-pointer transition-colors"
+              >
+                تسجيل الدخول الآن ←
+              </button>
+            </div>
 
             {/* Clear Admin Login Button (Requirement 2) */}
             <div className="pt-3 border-t border-slate-800 text-center">

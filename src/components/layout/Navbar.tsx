@@ -20,7 +20,7 @@ import { AppNotification, HallSettings } from '../../types';
 interface NavbarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
-  openAuthModal: () => void;
+  openAuthModal: (tab?: 'login' | 'register') => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openAuthModal }) => {
@@ -35,24 +35,46 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
   }, []);
 
   useEffect(() => {
-    if (user) {
-      getNotifications(user.id, user.role === 'ADMIN').then(setNotifications);
-    } else {
+    if (!user) {
       setNotifications([]);
+      return;
     }
+
+    const fetchNotifs = () => {
+      getNotifications(user.id, user.role === 'ADMIN')
+        .then(setNotifications)
+        .catch(() => {});
+    };
+
+    fetchNotifs();
+    // Auto-polling every 5 seconds to show new booking notifications without page reload
+    const interval = setInterval(fetchNotifs, 5000);
+
+    const handleSync = () => fetchNotifs();
+    window.addEventListener('dhuraydan:notif-update', handleSync);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('dhuraydan:notif-update', handleSync);
+    };
   }, [user, currentTab]);
 
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
   const handleNotificationClick = async (notif: AppNotification) => {
+    // 1. Immediately remove from dropdown list so it never appears again
+    setNotifications(prev => prev.filter(n => n.id !== notif.id));
+    setNotificationsOpen(false);
+
+    // 2. Mark as read on server & cache
     await markNotificationRead(notif.id);
-    setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
+
+    // 3. Navigate
     if (isAdmin) {
       setCurrentTab('admin');
     } else {
       setCurrentTab('account');
     }
-    setNotificationsOpen(false);
   };
 
   const navLinks = [
@@ -288,19 +310,30 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
             ) : (
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={() => setCurrentTab('admin-login')}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all hover:scale-102"
+                  className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all cursor-pointer"
                   title="تسجيل دخول إدارة القاعة"
                 >
                   <Shield className="w-3.5 h-3.5 text-amber-400" />
                   <span>دخول الإدارة</span>
                 </button>
                 <button
-                  onClick={openAuthModal}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black shadow-md shadow-amber-500/20 transition-all hover:scale-102"
+                  type="button"
+                  onClick={() => openAuthModal('login')}
+                  className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold bg-[#161c29] hover:bg-[#1f2738] text-amber-300 border border-amber-500/30 hover:border-amber-400 transition-all cursor-pointer"
+                  title="تسجيل الدخول"
                 >
-                  <UserIcon className="w-4 h-4" />
-                  <span>دخول / تسجيل</span>
+                  <UserIcon className="w-3.5 h-3.5 text-amber-400" />
+                  <span>تسجيل الدخول</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('register')}
+                  className="flex items-center gap-1 px-3.5 py-2 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black shadow-md shadow-amber-500/20 transition-all cursor-pointer"
+                  title="إنشاء حساب جديد"
+                >
+                  <span>إنشاء حساب</span>
                 </button>
               </div>
             )}
@@ -384,22 +417,36 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, openA
               </div>
             ) : (
               <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      openAuthModal('login');
+                    }}
+                    className="py-2.5 rounded-lg text-xs font-bold bg-[#181f30] hover:bg-[#222b42] text-amber-300 border border-amber-500/30 text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <UserIcon className="w-3.5 h-3.5 text-amber-400" />
+                    <span>تسجيل الدخول</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      openAuthModal('register');
+                    }}
+                    className="py-2.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black text-center flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <span>إنشاء حساب</span>
+                  </button>
+                </div>
                 <button
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    openAuthModal();
-                  }}
-                  className="w-full py-2.5 rounded-lg text-sm font-bold bg-amber-500 hover:bg-amber-400 text-black text-center flex items-center justify-center gap-1.5"
-                >
-                  <UserIcon className="w-4 h-4" />
-                  <span>تسجيل الدخول / إنشاء حساب</span>
-                </button>
-                <button
+                  type="button"
                   onClick={() => {
                     setMobileMenuOpen(false);
                     setCurrentTab('admin-login');
                   }}
-                  className="w-full py-2.5 rounded-lg text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center gap-1.5"
+                  className="w-full py-2.5 rounded-lg text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Shield className="w-4 h-4 text-amber-400" />
                   <span>دخول الإدارة (Admin Login)</span>
