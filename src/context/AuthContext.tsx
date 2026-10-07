@@ -100,6 +100,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const authenticatedUser: User = data.user;
     const authToken: string = data.token || `token_${authenticatedUser.id}`;
 
+    // Cleanse all previous cached user state to enforce independent sessions
+    queryClient.removeQueries({ queryKey: ['bookings'] });
+    queryClient.removeQueries({ queryKey: ['notifications'] });
+    queryClient.removeQueries({ queryKey: ['users'] });
+    queryClient.removeQueries({ queryKey: ['authUser'] });
+
     setUser(authenticatedUser);
     setToken(authToken);
     queryClient.setQueryData(['authUser'], authenticatedUser);
@@ -126,16 +132,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(formatErrorMessage(data?.error || data, 'فشل إنشاء الحساب'));
     }
 
-    // Role is strictly CUSTOMER from server
+    // Return created customer record without auto-logging in, to direct immediately to login page
     const newUser: User = data.user;
-    const authToken: string = data.token || `token_${newUser.id}`;
-
-    setUser(newUser);
-    setToken(authToken);
-    queryClient.setQueryData(['authUser'], newUser);
-    localStorage.setItem(TOKEN_KEY, authToken);
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(newUser));
-
     return newUser;
   };
 
@@ -150,11 +148,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setUser(null);
     setToken(null);
-    queryClient.setQueryData(['authUser'], null);
-    queryClient.invalidateQueries({ queryKey: ['notifications'] });
-    queryClient.invalidateQueries({ queryKey: ['bookings'] });
+    queryClient.clear();
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(CURRENT_USER_KEY);
+    localStorage.removeItem('rdn_dismissed_notification_ids');
+    document.cookie = `${TOKEN_KEY}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
   };
 
   const updateProfile = async (data: { name: string; phone: string }) => {
@@ -166,6 +164,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const setAuthUser = (authUser: User, authToken: string) => {
+    // Clear any leftover query cache from other sessions
+    queryClient.removeQueries({ queryKey: ['bookings'] });
+    queryClient.removeQueries({ queryKey: ['notifications'] });
+    queryClient.removeQueries({ queryKey: ['users'] });
+    queryClient.removeQueries({ queryKey: ['authUser'] });
+
     setUser(authUser);
     setToken(authToken);
     queryClient.setQueryData(['authUser'], authUser);

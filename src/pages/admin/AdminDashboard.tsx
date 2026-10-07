@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { GlobalToggleBar } from '../../components/layout/GlobalToggleBar';
 import {
   Booking,
   BookingStatus,
@@ -659,8 +660,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Quick Header Actions: Notification Bell with Red Alert Icon */}
+          {/* Quick Header Actions: Notification Bell with Red Alert Icon & Theme/Lang Toggle */}
           <div className="flex items-center gap-2">
+            <GlobalToggleBar variant="inline" />
+
             <div className="relative">
               <button
                 onClick={() => setAdminNotifsOpen(!adminNotifsOpen)}

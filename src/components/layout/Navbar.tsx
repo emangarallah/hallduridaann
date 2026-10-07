@@ -14,6 +14,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { GlobalToggleBar } from './GlobalToggleBar';
 import { useHallSettingsQuery } from '../../hooks/useHallDataQuery';
 import {
   useNotificationsQuery,
@@ -103,38 +104,40 @@ const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, ope
             </span>
           </div>
 
-          {/* Quick Demo Switcher & WhatsApp */}
-          <div className="flex items-center gap-3">
-            <a
-              href={`https://wa.me/${settings?.whatsappNumber?.replace(/[^0-9]/g, '') || '967777123456'}?text=${encodeURIComponent('السلام عليكم، أود الاستفسار عن حجز قاعة ذو ريدان للأفراح')}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors"
-            >
-              <MessageCircle className="w-3.5 h-3.5" />
-              <span>واتساب سريع</span>
-            </a>
+            {/* Quick Demo Switcher & WhatsApp & Global Toggle */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <GlobalToggleBar variant="inline" />
 
-            {user ? (
-              <div className="flex items-center gap-1.5 text-[11px]">
-                {isAdmin ? (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40">
-                    <Shield className="w-3 h-3 text-amber-400" />
-                    <span>مدير النظام (ADMIN)</span>
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/40">
-                    <UserIcon className="w-3 h-3 text-blue-400" />
-                    <span>عميل (CUSTOMER)</span>
-                  </span>
-                )}
-              </div>
-            ) : (
-              <span className="text-[11px] text-slate-400 bg-[#1a2030] px-2 py-0.5 rounded border border-slate-700/60">
-                زائر غير مسجل
-              </span>
-            )}
-          </div>
+              <a
+                href={`https://wa.me/${settings?.whatsappNumber?.replace(/[^0-9]/g, '') || '967777123456'}?text=${encodeURIComponent('السلام عليكم، أود الاستفسار عن حجز قاعة ذو ريدان للأفراح')}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>واتساب سريع</span>
+              </a>
+
+              {user ? (
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  {isAdmin ? (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40">
+                      <Shield className="w-3 h-3 text-amber-400" />
+                      <span>مدير النظام (ADMIN)</span>
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/40">
+                      <UserIcon className="w-3 h-3 text-blue-400" />
+                      <span>عميل (CUSTOMER)</span>
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <span className="text-[11px] text-slate-400 bg-[#1a2030] px-2 py-0.5 rounded border border-slate-700/60">
+                  زائر غير مسجل
+                </span>
+              )}
+            </div>
         </div>
       </div>
 
@@ -368,6 +371,11 @@ const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, ope
             </button>
           ))}
 
+          <div className="py-2 px-3 rounded-lg bg-[#141a27] border border-slate-800 flex items-center justify-between">
+            <span className="text-xs text-slate-300 font-medium">الوضع الليلي والنهاري</span>
+            <GlobalToggleBar variant="inline" />
+          </div>
+
           <div className="pt-3 border-t border-slate-800 flex flex-col gap-2">
             {user ? (
               <div className="flex flex-col gap-2">
@@ -448,7 +456,7 @@ const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, ope
                   className="w-full py-2.5 rounded-lg text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Shield className="w-4 h-4 text-amber-400" />
-                  <span>دخول الإدارة (Admin Login)</span>
+                  <span>دخول الإدارة</span>
                 </button>
               </div>
             )}

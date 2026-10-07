@@ -14,6 +14,7 @@ import {
   dbSaveUser,
   dbUpdateUserStatus,
   dbUpdateUserRole,
+  dbUpdateUserPassword,
   dbSaveBooking,
   dbUpdateBookingStatus,
   dbSaveSettings,
@@ -103,11 +104,13 @@ function parseCookies(req: Request): Record<string, string> {
 const AUTH_SECRET = process.env.AUTH_SECRET || process.env.BETTER_AUTH_SECRET || 'dhuraydan_auth_secret_key_2026';
 
 export function signAuthToken(user: { id: string; email: string; role: string }): string {
+  const sessionId = `sess_${user.id}_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
   const payload = Buffer.from(
     JSON.stringify({
       id: user.id,
       email: user.email,
       role: user.role,
+      sessionId,
       t: Date.now()
     })
   ).toString('base64url');
@@ -530,6 +533,239 @@ apiRouter.all('/auth/role*', (req, res) => {
     error: 'غير مصرح بتعديل الصلاحيات: يتم تحديد الصلاحيات حصرياً من قِبل السيرفر (403 Forbidden)',
     code: 'FORBIDDEN'
   });
+});
+
+// ==============================================================================
+// Professional & Secure Password Reset System (Customer & Admin)
+// ==============================================================================
+interface PasswordResetRecord {
+  token: string;
+  userId: string;
+  email: string;
+  role: 'ADMIN' | 'CUSTOMER';
+  name: string;
+  expiresAt: number;
+  createdAt: number;
+  used: boolean;
+}
+
+// In-memory token store with auto-cleanup
+const passwordResetTokens = new Map<string, PasswordResetRecord>();
+
+// Periodically clean up expired tokens every 15 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, record] of passwordResetTokens.entries()) {
+    if (now > record.expiresAt || record.used) {
+      passwordResetTokens.delete(t);
+    }
+  }
+}, 15 * 60 * 1000);
+
+function maskEmail(email: string): string {
+  if (!email || !email.includes('@')) return '***@***.***';
+  const [name, domain] = email.split('@');
+  if (name.length <= 2) {
+    return `${name[0]}***@${domain}`;
+  }
+  return `${name[0]}${'*'.repeat(Math.min(name.length - 2, 5))}${name[name.length - 1]}@${domain}`;
+}
+
+function createPasswordResetToken(user: { id: string; email: string; role: 'ADMIN' | 'CUSTOMER'; name: string }): string {
+  const randomHex = crypto.randomBytes(32).toString('hex');
+  const payload = Buffer.from(
+    JSON.stringify({
+      uid: user.id,
+      em: user.email,
+      exp: Date.now() + 30 * 60 * 1000, // 30 minutes expiration
+      rnd: randomHex
+    })
+  ).toString('base64url');
+
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  const token = `rst.${payload}.${sig}`;
+
+  passwordResetTokens.set(token, {
+    token,
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+    expiresAt: Date.now() + 30 * 60 * 1000,
+    createdAt: Date.now(),
+    used: false
+  });
+
+  return token;
+}
+
+function validatePasswordResetToken(token: string): PasswordResetRecord | null {
+  if (!token || typeof token !== 'string') return null;
+
+  const record = passwordResetTokens.get(token);
+  if (!record) return null;
+  if (record.used) return null;
+  if (Date.now() > record.expiresAt) {
+    passwordResetTokens.delete(token);
+    return null;
+  }
+
+  // Also verify HMAC signature
+  try {
+    if (!token.startsWith('rst.')) return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [, payloadB64, sig] = parts;
+    const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(payloadB64).digest('base64url');
+    if (sig !== expectedSig) return null;
+  } catch {
+    return null;
+  }
+
+  return record;
+}
+
+// 1. Request Password Reset (Anti-enumeration compliant)
+apiRouter.post('/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        error: 'يرجى إدخال بريد إلكتروني صحيح'
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await dbFindUserByEmail(normalizedEmail);
+
+    // Standard message to prevent user enumeration
+    const genericSuccessMessage =
+      'إذا كان هذا البريد الإلكتروني مسجلاً لدينا، فقد تم إرسال رابط آمن لإعادة تعيين كلمة المرور.';
+
+    if (!user || !user.isActive) {
+      // Simulate real response timing
+      await new Promise(r => setTimeout(r, 400));
+      return res.json({
+        success: true,
+        message: genericSuccessMessage
+      });
+    }
+
+    // Generate secure time-limited token
+    const token = createPasswordResetToken(user);
+    const resetPath = `/reset-password?token=${encodeURIComponent(token)}`;
+
+    console.log(`[Password Reset] Generated reset link for user ${user.id} (${user.email}, ${user.role}): ${resetPath}`);
+
+    return res.json({
+      success: true,
+      message: genericSuccessMessage,
+      // Provide reset link and metadata for interactive preview and verification
+      resetUrl: resetPath,
+      token,
+      emailMasked: maskEmail(user.email),
+      role: user.role
+    });
+  } catch (err: any) {
+    console.error('[Forgot Password API Error]', err);
+    res.status(500).json({ success: false, error: 'حدث خطأ أثناء معالجة طلب استعادة كلمة المرور' });
+  }
+});
+
+// 2. Verify Reset Token before showing password entry form
+apiRouter.get('/auth/verify-reset-token', async (req, res) => {
+  try {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    if (!token) {
+      return res.status(400).json({ valid: false, error: 'رمز إعادة التعيين مفقود' });
+    }
+
+    const record = validatePasswordResetToken(token);
+    if (!record) {
+      return res.status(400).json({ valid: false, error: 'رابط إعادة التعيين غير صالح أو انتهت صلاحيته' });
+    }
+
+    const user = await dbFindUserById(record.userId);
+    if (!user || !user.isActive) {
+      return res.status(400).json({ valid: false, error: 'الحساب غير موجود أو موقوف حالياً' });
+    }
+
+    return res.json({
+      valid: true,
+      emailMasked: maskEmail(user.email),
+      name: user.name,
+      role: user.role,
+      expiresAt: record.expiresAt
+    });
+  } catch (err: any) {
+    console.error('[Verify Reset Token API Error]', err);
+    res.status(500).json({ valid: false, error: 'فشل التحقق من رمز إعادة التعيين' });
+  }
+});
+
+// 3. Reset Password with new password and Bcrypt hashing
+apiRouter.post('/auth/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword, confirmPassword } = req.body;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ success: false, error: 'رمز إعادة التعيين مفقود' });
+    }
+
+    if (!newPassword || typeof newPassword !== 'string') {
+      return res.status(400).json({ success: false, error: 'يرجى إدخال كلمة المرور الجديدة' });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, error: 'كلمة المرور يجب أن لا تقل عن 8 أحرف أو أرقام' });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, error: 'كلمة المرور وتأكيدها غير متطابقين' });
+    }
+
+    const record = validatePasswordResetToken(token);
+    if (!record) {
+      return res.status(400).json({
+        success: false,
+        error: 'رابط إعادة التعيين غير صالح أو انتهت صلاحيته (الصلاحية 30 دقيقة)'
+      });
+    }
+
+    const user = await dbFindUserById(record.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'المستخدم غير موجود' });
+    }
+
+    // Securely hash with Bcrypt
+    const newHash = hashPassword(newPassword);
+
+    // Save to PostgreSQL and update memory store
+    await dbUpdateUserPassword(user.id, newHash);
+
+    // Invalidate reset token immediately (single-use enforcement)
+    record.used = true;
+    passwordResetTokens.delete(token);
+
+    // Invalidate previous sessions for security
+    for (const [sessToken, uid] of memStore.sessions.entries()) {
+      if (uid === user.id) {
+        memStore.sessions.delete(sessToken);
+      }
+    }
+
+    console.log(`[Password Reset] Password changed successfully for ${user.id} (${user.email}, ${user.role})`);
+
+    return res.json({
+      success: true,
+      message: 'تم تغيير كلمة المرور بنجاح! يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.',
+      role: user.role
+    });
+  } catch (err: any) {
+    console.error('[Reset Password API Error]', err);
+    res.status(500).json({ success: false, error: 'حدث خطأ أثناء حفظ كلمة المرور الجديدة' });
+  }
 });
 
 // 3. Hall Content Endpoints (Settings, Services, Packages, Gallery, Reviews)

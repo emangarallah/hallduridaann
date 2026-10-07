@@ -232,7 +232,7 @@ export function useRegisterCustomerMutation() {
 export function useLoginCustomerMutation() {
   const queryClient = useQueryClient();
 
-  return useMutation<LoginResponse, Error, LoginPayload, { previousUser: User | null | undefined }>({
+  return useMutation<LoginResponse, Error, LoginPayload>({
     mutationFn: async (payload: LoginPayload) => {
       const res = await fetchApi('/api/auth/login', {
         method: 'POST',
@@ -252,36 +252,16 @@ export function useLoginCustomerMutation() {
 
       return data;
     },
-    onMutate: async (payload) => {
-      await queryClient.cancelQueries({ queryKey: ['authUser'] });
-      const previousUser = queryClient.getQueryData<User | null>(['authUser']);
-
-      // Optimistic user for instant client-side feedback
-      const optimisticUser: User = {
-        id: `usr_opt_${Date.now()}`,
-        name: payload.email.split('@')[0],
-        email: payload.email.trim(),
-        phone: '',
-        role: payload.email.toLowerCase().includes('admin') ? 'ADMIN' : 'CUSTOMER',
-        isActive: true,
-        createdAt: new Date().toISOString(),
-      };
-
-      queryClient.setQueryData(['authUser'], optimisticUser);
-      return { previousUser };
-    },
     onSuccess: (data) => {
       if (data?.user) {
+        // Enforce strict user session isolation in React Query cache
+        queryClient.removeQueries({ queryKey: ['bookings'] });
+        queryClient.removeQueries({ queryKey: ['notifications'] });
         queryClient.setQueryData(['authUser'], data.user);
       }
       queryClient.invalidateQueries({ queryKey: ['bookings'] });
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
-    },
-    onError: (_err, _vars, context) => {
-      if (context) {
-        queryClient.setQueryData(['authUser'], context.previousUser);
-      }
     },
   });
 }

@@ -1,16 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { X, Lock, Mail, User as UserIcon, Phone, Sparkles, AlertCircle, CheckCircle, ShieldCheck } from 'lucide-react';
+import {
+  X,
+  Lock,
+  Mail,
+  User as UserIcon,
+  Phone,
+  Sparkles,
+  AlertCircle,
+  CheckCircle,
+  ShieldCheck,
+  ExternalLink,
+  Copy,
+  Check,
+  RefreshCw
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useRegisterCustomerMutation, useLoginCustomerMutation } from '../../hooks/useCustomerBookingQuery';
 import { User } from '../../types';
-import { formatErrorMessage } from '../../utils/apiConfig';
+import { fetchApi, parseResponseJson, formatErrorMessage } from '../../utils/apiConfig';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (user: User) => void;
   onOpenAdminLogin?: () => void;
+  onNavigateToReset?: (token: string) => void;
   initialTab?: 'login' | 'register';
   initialEmail?: string;
 }
@@ -20,6 +35,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onSuccess,
   onOpenAdminLogin,
+  onNavigateToReset,
   initialTab = 'login',
   initialEmail = ''
 }) => {
@@ -44,14 +60,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Forgot password
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotResetUrl, setForgotResetUrl] = useState<string | null>(null);
+  const [forgotResetToken, setForgotResetToken] = useState<string | null>(null);
+  const [forgotCopied, setForgotCopied] = useState(false);
 
   const [error, setError] = useState('');
+  const [registeredSuccessNotice, setRegisteredSuccessNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       if (initialTab) setTab(initialTab);
       if (initialEmail) setLoginEmail(initialEmail);
       setError('');
+      setRegisteredSuccessNotice(null);
     }
   }, [isOpen, initialTab, initialEmail]);
 
@@ -103,13 +125,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         password: regPass
       });
 
-      // Quick toast notification (2s) and immediately transfer to login tab
-      showSuccess('تم إنشاء حسابك بنجاح! تفضل بتسجيل الدخول.', 2000);
+      // Requirement 2: Instant immediate transfer to login form with zero delay
       setTab('login');
       setLoginEmail(regEmail.trim());
       setLoginPass('');
       setRegPass('');
       setRegPassConfirm('');
+      setRegisteredSuccessNotice('تم إنشاء حسابك بنجاح! تفضل بإدخال كلمة المرور لتسجيل الدخول فوراً.');
+      showSuccess('تم إنشاء حسابك بنجاح! تم توجيهك فوراً إلى صفحة تسجيل الدخول.', 2500);
       window.history.pushState(null, '', '/login');
     } catch (err: any) {
       const code = err?.code;
@@ -151,14 +174,55 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleForgotSubmit = (e: React.FormEvent) => {
+  const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!forgotEmail) {
-      setError('يرجى إدخال بريدك الإلكتروني');
+    const cleanEmail = forgotEmail.trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setError('يرجى إدخال بريد إلكتروني صحيح');
       return;
     }
-    setForgotSent(true);
+
+    setForgotLoading(true);
     setError('');
+
+    try {
+      const res = await fetchApi('/api/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: cleanEmail })
+      });
+
+      const data = await parseResponseJson(res);
+
+      if (!res.ok) {
+        throw new Error(formatErrorMessage(data?.error || data, 'تعذر إرسال طلب استعادة كلمة المرور'));
+      }
+
+      setForgotSent(true);
+      if (data.resetUrl) setForgotResetUrl(data.resetUrl);
+      if (data.token) setForgotResetToken(data.token);
+    } catch (err: any) {
+      setError(formatErrorMessage(err, 'حدث خطأ أثناء معالجة الطلب'));
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleCopyForgotLink = () => {
+    if (!forgotResetUrl) return;
+    const fullUrl = `${window.location.origin}${forgotResetUrl}`;
+    navigator.clipboard.writeText(fullUrl);
+    setForgotCopied(true);
+    setTimeout(() => setForgotCopied(false), 2000);
+  };
+
+  const handleOpenResetPage = () => {
+    onClose();
+    if (forgotResetToken && onNavigateToReset) {
+      onNavigateToReset(forgotResetToken);
+    } else if (forgotResetUrl) {
+      window.history.pushState(null, '', forgotResetUrl);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
   };
 
   const navigateToAdminLogin = () => {
@@ -242,6 +306,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Login Form */}
         {tab === 'login' && (
           <form onSubmit={handleLoginSubmit} className="space-y-4">
+            {registeredSuccessNotice && (
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-400 flex items-center gap-2 animate-fadeIn">
+                <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+                <span>{registeredSuccessNotice}</span>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">
                 البريد الإلكتروني
@@ -451,16 +522,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {tab === 'forgot' && (
           <div className="space-y-4">
             {forgotSent ? (
-              <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-center space-y-2">
-                <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto" />
-                <h4 className="text-sm font-bold text-white">تم إرسال تعليمات الاستعادة</h4>
-                <p className="text-xs text-slate-300">
-                  إذا كان البريد ({forgotEmail}) مسجلاً لدينا، ستصلك رسالة تحتوي على رابط لإعادة تعيين كلمة المرور فوراً.
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-center space-y-3">
+                <CheckCircle className="w-10 h-10 text-emerald-400 mx-auto" />
+                <h4 className="text-sm font-bold text-white">تم إرسال رابط الاستعادة</h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  إذا كان البريد (<strong className="text-amber-300 font-mono" dir="ltr">{forgotEmail}</strong>) مسجلاً لدينا، فقد تم إنشاء رابط آمن مؤقت لإعادة تعيين كلمة المرور فوراً.
                 </p>
+
+                {/* Direct Interactive Link */}
+                {forgotResetUrl && (
+                  <div className="pt-2 p-3 rounded-2xl bg-[#161c29] border border-amber-500/40 space-y-2.5 text-right">
+                    <div className="text-[11px] text-amber-300 font-semibold flex items-center justify-between">
+                      <span>رابط إعادة التعيين المباشر:</span>
+                      <span className="text-[10px] text-slate-400">صالح لمدة 30 دقيقة</span>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenResetPage}
+                        className="flex-1 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>فتح صفحة تعيين كلمة المرور فوراً</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleCopyForgotLink}
+                        className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-all flex items-center justify-center gap-1 cursor-pointer"
+                        title="نسخ الرابط"
+                      >
+                        {forgotCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{forgotCopied ? 'تم النسخ' : 'نسخ'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => { setTab('login'); setForgotSent(false); }}
-                  className="mt-3 text-xs text-amber-400 hover:underline inline-block"
+                  onClick={() => { setTab('login'); setForgotSent(false); setForgotResetUrl(null); }}
+                  className="mt-3 text-xs text-amber-400 hover:underline inline-block cursor-pointer"
                 >
                   العودة لتسجيل الدخول
                 </button>
@@ -469,33 +572,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <form onSubmit={handleForgotSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    البريد الإلكتروني المسجل
+                    البريد الإلكتروني المسجل في الحساب
                   </label>
                   <div className="relative">
                     <input
                       type="email"
                       value={forgotEmail}
                       onChange={(e) => setForgotEmail(e.target.value)}
-                      placeholder="name@example.com"
-                      className="w-full bg-[#0b0e16] border border-slate-700 rounded-xl py-2.5 px-3 pl-10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                      placeholder="customer@dhuraydan.com"
+                      className="w-full bg-[#0b0e16] border border-slate-700 rounded-xl py-2.5 px-3 pl-10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 font-mono"
                       dir="ltr"
                       required
                     />
                     <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
                   </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    لن يتم كشف أي معلومات عن الحساب لمنع محاولات التخمين.
+                  </p>
                 </div>
 
                 <div className="flex gap-2">
                   <button
                     type="submit"
-                    className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-md transition-colors"
+                    disabled={forgotLoading}
+                    className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-md transition-colors disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    إرسال رابط الاستعادة
+                    {forgotLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>جاري المعالجة...</span>
+                      </>
+                    ) : (
+                      <span>إرسال رابط الاستعادة</span>
+                    )}
                   </button>
                   <button
                     type="button"
                     onClick={() => { setTab('login'); setError(''); }}
-                    className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
+                    className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer"
                   >
                     إلغاء
                   </button>

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 import { WhatsAppFloat } from './components/layout/WhatsAppFloat';
+import { GlobalToggleBar } from './components/layout/GlobalToggleBar';
 import { HomePage } from './pages/HomePage';
 import { AboutPage } from './pages/AboutPage';
 import { ServicesPage } from './pages/ServicesPage';
@@ -15,6 +17,7 @@ import { AccountPage } from './pages/AccountPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { AdminLoginPage } from './pages/admin/AdminLoginPage';
 import { Forbidden403Page } from './pages/Forbidden403Page';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { AuthModal } from './components/modals/AuthModal';
 import { BookingDetailsModal } from './components/modals/BookingDetailsModal';
 import { LightboxModal } from './components/modals/LightboxModal';
@@ -108,6 +111,8 @@ function MainApp() {
       }
     } else if (path === '/403') {
       setCurrentTab('403');
+    } else if (path === '/reset-password') {
+      setCurrentTab('reset-password');
     } else if (path === '/login') {
       setCurrentTab('home');
       handleOpenAuthModal('login');
@@ -160,6 +165,8 @@ function MainApp() {
         }
       } else if (path === '/403') {
         setCurrentTab('403');
+      } else if (path === '/reset-password') {
+        setCurrentTab('reset-password');
       } else if (path === '/account') {
         setCurrentTab('account');
       } else if (path === '/') {
@@ -371,6 +378,13 @@ function MainApp() {
         );
       case 'contact':
         return <ContactPage settings={settings} />;
+      case 'reset-password':
+        return (
+          <ResetPasswordPage
+            setCurrentTab={navigate}
+            openAuthModal={handleOpenAuthModal}
+          />
+        );
       case 'account':
         return (
           <AccountPage
@@ -418,6 +432,9 @@ function MainApp() {
       {/* Floating Quick WhatsApp Widget */}
       {currentTab !== 'admin' && currentTab !== 'admin-login' && currentTab !== '403' && <WhatsAppFloat settings={settings} />}
 
+      {/* Global Floating Toggle (Theme & Language) available on ALL pages */}
+      <GlobalToggleBar variant="floating" />
+
       {/* Modals */}
       <AuthModal
         isOpen={authModalOpen}
@@ -426,6 +443,11 @@ function MainApp() {
         onOpenAdminLogin={() => {
           setAuthModalOpen(false);
           navigate('admin-login');
+        }}
+        onNavigateToReset={(resetToken) => {
+          setAuthModalOpen(false);
+          navigate('reset-password');
+          window.history.pushState(null, '', `/reset-password?token=${encodeURIComponent(resetToken)}`);
         }}
         onSuccess={(authenticatedUser: User) => {
           refreshAllData();
@@ -467,8 +489,10 @@ function MainApp() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <MainApp />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <MainApp />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

@@ -794,6 +794,27 @@ export async function dbUpdateUserRole(id: string, role: 'ADMIN' | 'CUSTOMER', p
   }
 }
 
+export async function dbUpdateUserPassword(id: string, newPasswordHash: string): Promise<boolean> {
+  await ensureDbReady();
+  let updated = false;
+  if (pgPool && isPgConnected) {
+    try {
+      const res = await pgPool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [newPasswordHash, id]);
+      if (res && res.rowCount && res.rowCount > 0) {
+        updated = true;
+      }
+    } catch (e: any) {
+      console.warn('[DB Error] Failed to update user password in PG:', e.message);
+    }
+  }
+  const u = memStore.users.find(user => user.id === id);
+  if (u) {
+    u.password = newPasswordHash;
+    updated = true;
+  }
+  return updated;
+}
+
 export async function dbSaveBooking(booking: Booking) {
   if (pgPool && isPgConnected) {
     try {

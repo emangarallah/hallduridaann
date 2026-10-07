@@ -3,6 +3,7 @@ import { ShieldCheck, Lock, Mail, AlertCircle, ArrowLeft, CheckCircle2 } from 'l
 import { useAuth } from '../../context/AuthContext';
 import { User } from '../../types';
 import { fetchApi, parseResponseJson, formatErrorMessage } from '../../utils/apiConfig';
+import { ForgotPasswordModal } from '../../components/modals/ForgotPasswordModal';
 
 interface AdminLoginPageProps {
   onSuccess: (user: User) => void;
@@ -18,6 +19,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [forgotModalOpen, setForgotModalOpen] = useState(false);
 
   // If already logged in as ADMIN
   if (user && user.role === 'ADMIN') {
@@ -134,9 +136,18 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              كلمة المرور
-            </label>
+            <div className="flex justify-between items-center mb-1.5">
+              <label className="block text-xs font-semibold text-slate-300">
+                كلمة المرور
+              </label>
+              <button
+                type="button"
+                onClick={() => setForgotModalOpen(true)}
+                className="text-[11px] text-amber-400 hover:text-amber-300 hover:underline cursor-pointer"
+              >
+                نسيت كلمة المرور؟
+              </button>
+            </div>
             <div className="relative">
               <input
                 type="password"
@@ -181,6 +192,19 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Forgot Password Modal for Admin */}
+      <ForgotPasswordModal
+        isOpen={forgotModalOpen}
+        onClose={() => setForgotModalOpen(false)}
+        initialEmail={email}
+        source="admin"
+        onNavigateToReset={(resetToken) => {
+          setForgotModalOpen(false);
+          setCurrentTab('reset-password');
+          window.history.pushState(null, '', `/reset-password?token=${encodeURIComponent(resetToken)}`);
+        }}
+      />
     </div>
   );
 };
