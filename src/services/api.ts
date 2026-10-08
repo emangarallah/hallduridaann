@@ -686,13 +686,13 @@ export async function addNotification(data: Omit<AppNotification, 'id' | 'isRead
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
+  // "Read" now means permanent deletion from Neon and local cache.
   dismissNotificationId(id);
   try {
-    await fetchApi(`/api/notifications/${id}/read`, { method: 'PATCH' });
+    await fetchApi(`/api/notifications/${id}`, { method: 'DELETE' });
   } catch {}
   const list = getLocal<AppNotification[]>(NOTIFICATIONS_KEY, []);
-  const updated = list.map(n => n.id === id ? { ...n, isRead: true } : n).filter(n => n.id !== id);
-  setLocal(NOTIFICATIONS_KEY, updated);
+  setLocal(NOTIFICATIONS_KEY, list.filter(n => n.id !== id && !n.isRead));
 }
 
 export async function markAllNotificationsRead(userId: string, isAdmin = false): Promise<void> {
