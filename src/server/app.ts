@@ -1062,9 +1062,6 @@ apiRouter.post('/bookings', async (req, res) => {
 apiRouter.get('/notifications', async (req, res) => {
   await ensureDbReady();
   const user = (req as any).user;
-  const queryUserId = typeof req.query.userId === 'string' ? req.query.userId : null;
-  const queryIsAdmin = req.query.isAdmin === 'true';
-
   if (!user) {
     return res.status(401).json({ success: false, error: 'يجب تسجيل الدخول أولاً' });
   }
