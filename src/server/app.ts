@@ -1065,12 +1065,13 @@ apiRouter.get('/notifications', async (req, res) => {
   const queryUserId = typeof req.query.userId === 'string' ? req.query.userId : null;
   const queryIsAdmin = req.query.isAdmin === 'true';
 
-  const effectiveUserId = user?.id || queryUserId;
-  const effectiveIsAdmin = user?.role === 'ADMIN' || queryIsAdmin;
-
-  if (!effectiveUserId && !effectiveIsAdmin) {
-    return res.json([]);
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'يجب تسجيل الدخول أولاً' });
   }
+
+  // Never trust userId/isAdmin query parameters for authorization.
+  const effectiveUserId = user.id;
+  const effectiveIsAdmin = user.role === 'ADMIN';
 
   const legacyIds = new Set(
     memStore.notifications
@@ -1110,18 +1111,18 @@ apiRouter.get('/notifications', async (req, res) => {
 apiRouter.patch('/notifications/read-all', async (req, res) => {
   await ensureDbReady();
   const user = (req as any).user;
-  const targetUserId = req.body?.userId || user?.id;
-  const isAdmin = req.body?.isAdmin === true || user?.role === 'ADMIN';
-
-  if (!targetUserId && !isAdmin) {
-    return res.status(401).json({ success: false, error: 'غير مصرح' });
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'يجب تسجيل الدخول أولاً' });
   }
+
+  const targetUserId = user.id;
+  const isAdmin = user.role === 'ADMIN';
 
   const toDelete = memStore.notifications.filter(n => {
     if (isAdmin) {
       return n.userId === 'all_admin' || n.userId === targetUserId;
     }
-    return targetUserId && n.userId === targetUserId;
+    return n.userId === targetUserId;
   });
 
   for (const n of toDelete) {
