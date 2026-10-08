@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Lock,
@@ -67,6 +67,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const [error, setError] = useState('');
   const [registeredSuccessNotice, setRegisteredSuccessNotice] = useState<string | null>(null);
+  const [registerSubmitting, setRegisterSubmitting] = useState(false);
+  const registerSubmitLock = useRef(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -74,12 +76,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (initialEmail) setLoginEmail(initialEmail);
       setError('');
       setRegisteredSuccessNotice(null);
+      setRegisterSubmitting(false);
+      registerSubmitLock.current = false;
     }
   }, [isOpen, initialTab, initialEmail]);
 
   if (!isOpen) return null;
 
-  const isSubmitting = registerMutation.isPending || loginMutation.isPending;
+  const isSubmitting = registerSubmitting || registerMutation.isPending || loginMutation.isPending;
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,6 +113,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Lock immediately on the first click. React state alone is asynchronous,
+    // so the ref prevents a second request even during the same event loop tick.
+    if (registerSubmitLock.current) return;
+    registerSubmitLock.current = true;
+    setRegisterSubmitting(true);
     setError('');
 
     try {
@@ -171,6 +181,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const msg = formatErrorMessage(err, 'حدث خطأ أثناء إنشاء الحساب');
       setError(msg);
       showError(msg);
+    } finally {
+      registerSubmitLock.current = false;
+      setRegisterSubmitting(false);
     }
   };
 
@@ -489,7 +502,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               disabled={isSubmitting}
               className="w-full mt-2 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer"
             >
-              {registerMutation.isPending ? 'جاري إنشاء الحساب في السيرفر...' : 'تأكيد وإنشاء الحساب'}
+              {registerSubmitting || registerMutation.isPending ? 'جاري إنشاء الحساب...' : 'تأكيد وإنشاء الحساب'}
             </button>
 
             {/* Instant single-click switch to Login */}
