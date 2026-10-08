@@ -1058,6 +1058,9 @@ apiRouter.post('/bookings', async (req, res) => {
 });
 
 // Notifications: only fresh unread notifications are exposed to the user.
+// The current production cutoff is the start of October 8, 2026 in Yemen (UTC+03:00).
+const NOTIFICATIONS_NEW_SINCE = new Date('2026-10-08T00:00:00+03:00').getTime();
+
 // Read notifications and legacy notifications are permanently removed from the store.
 apiRouter.get('/notifications', async (req, res) => {
   await ensureDbReady();
@@ -1084,7 +1087,11 @@ apiRouter.get('/notifications', async (req, res) => {
   );
 
   const staleIds = scoped
-    .filter(n => legacyIds.has(n.id) || n.isRead)
+    .filter(n => {
+      const createdAtMs = Date.parse(n.createdAt);
+      const isOld = Number.isFinite(createdAtMs) && createdAtMs < NOTIFICATIONS_NEW_SINCE;
+      return legacyIds.has(n.id) || n.isRead || isOld;
+    })
     .map(n => n.id);
 
   if (staleIds.length > 0) {
