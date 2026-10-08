@@ -67,7 +67,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const [error, setError] = useState('');
   const [registeredSuccessNotice, setRegisteredSuccessNotice] = useState<string | null>(null);
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [registerSubmitting, setRegisterSubmitting] = useState(false);
+  const loginSubmitLock = useRef(false);
   const registerSubmitLock = useRef(false);
 
   useEffect(() => {
@@ -76,17 +78,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (initialEmail) setLoginEmail(initialEmail);
       setError('');
       setRegisteredSuccessNotice(null);
+      setLoginSubmitting(false);
       setRegisterSubmitting(false);
+      loginSubmitLock.current = false;
       registerSubmitLock.current = false;
     }
   }, [isOpen, initialTab, initialEmail]);
 
   if (!isOpen) return null;
 
-  const isSubmitting = registerSubmitting || registerMutation.isPending || loginMutation.isPending;
+  const isSubmitting = loginSubmitting || loginMutation.isPending || registerSubmitting || registerMutation.isPending;
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Lock immediately on the first click. React state updates are asynchronous,
+    // so the ref prevents duplicate login requests during the same event loop tick.
+    if (loginSubmitLock.current) return;
+    loginSubmitLock.current = true;
+    setLoginSubmitting(true);
     setError('');
 
     try {
@@ -108,6 +118,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const msg = formatErrorMessage(err, 'حدث خطأ أثناء تسجيل الدخول: تحقق من البريد الإلكتروني وكلمة المرور');
       setError(msg);
       showError(msg);
+    } finally {
+      loginSubmitLock.current = false;
+      setLoginSubmitting(false);
     }
   };
 
@@ -376,7 +389,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               disabled={isSubmitting}
               className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer"
             >
-              {loginMutation.isPending ? 'جاري التحقق وتسجيل الدخول...' : 'تسجيل الدخول'}
+              {loginSubmitting || loginMutation.isPending ? 'جاري التحقق وتسجيل الدخول...' : 'تسجيل الدخول'}
             </button>
 
             {/* Instant single-click switch to Register */}
