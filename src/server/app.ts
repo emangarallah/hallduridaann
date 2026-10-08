@@ -28,7 +28,8 @@ import {
   dbUpdateReviewStatus,
   dbDeleteReview,
   dbSaveNotification,
-  dbMarkNotificationRead
+  dbMarkNotificationRead,
+  dbDeleteNotification
 } from './db.ts';
 import type {
   Booking,
@@ -1057,7 +1058,8 @@ apiRouter.post('/bookings', async (req, res) => {
   });
 });
 
-// Notifications
+// Notifications: only fresh unread notifications are exposed to the user.
+// Read notifications and legacy notifications are permanently removed from the store.
 apiRouter.get('/notifications', async (req, res) => {
   await ensureDbReady();
   const user = (req as any).user;
@@ -1071,16 +1073,39 @@ apiRouter.get('/notifications', async (req, res) => {
     return res.json([]);
   }
 
-  // Filter out any legacy mock notifications containing Sami
-  const validNotifs = memStore.notifications.filter(
-    n => n.id !== 'notif_1' && n.id !== 'notif_2' && !(n.message && n.message.includes('سامي'))
+  const legacyIds = new Set(
+    memStore.notifications
+      .filter(n => n.id === 'notif_1' || n.id === 'notif_2' || (n.message && n.message.includes('سامي')))
+      .map(n => n.id)
   );
 
-  if (effectiveIsAdmin) {
-    return res.json(validNotifs.filter(n => n.userId === 'all_admin' || (effectiveUserId && n.userId === effectiveUserId)));
+  const scoped = memStore.notifications.filter(n =>
+    legacyIds.has(n.id) ||
+    (effectiveIsAdmin
+      ? (n.userId === 'all_admin' || (effectiveUserId && n.userId === effectiveUserId))
+      : n.userId === effectiveUserId)
+  );
+
+  const staleIds = scoped
+    .filter(n => legacyIds.has(n.id) || n.isRead)
+    .map(n => n.id);
+
+  if (staleIds.length > 0) {
+    for (const id of staleIds) {
+      await dbDeleteNotification(id);
+    }
+    memStore.notifications = memStore.notifications.filter(n => !staleIds.includes(n.id));
   }
 
-  res.json(validNotifs.filter(n => n.userId === effectiveUserId));
+  const fresh = memStore.notifications.filter(n => {
+    if (n.isRead) return false;
+    if (effectiveIsAdmin) {
+      return n.userId === 'all_admin' || (effectiveUserId && n.userId === effectiveUserId);
+    }
+    return n.userId === effectiveUserId;
+  });
+
+  return res.json(fresh);
 });
 
 apiRouter.patch('/notifications/read-all', async (req, res) => {
@@ -1089,25 +1114,79 @@ apiRouter.patch('/notifications/read-all', async (req, res) => {
   const targetUserId = req.body?.userId || user?.id;
   const isAdmin = req.body?.isAdmin === true || user?.role === 'ADMIN';
 
-  for (const n of memStore.notifications) {
-    if (isAdmin && (n.userId === 'all_admin' || n.userId === targetUserId)) {
-      n.isRead = true;
-      await dbMarkNotificationRead(n.id);
-    } else if (targetUserId && n.userId === targetUserId) {
-      n.isRead = true;
-      await dbMarkNotificationRead(n.id);
-    }
+  if (!targetUserId && !isAdmin) {
+    return res.status(401).json({ success: false, error: 'غير مصرح' });
   }
-  res.json({ success: true });
+
+  const toDelete = memStore.notifications.filter(n => {
+    if (isAdmin) {
+      return n.userId === 'all_admin' || n.userId === targetUserId;
+    }
+    return targetUserId && n.userId === targetUserId;
+  });
+
+  for (const n of toDelete) {
+    await dbDeleteNotification(n.id);
+  }
+
+  const ids = new Set(toDelete.map(n => n.id));
+  memStore.notifications = memStore.notifications.filter(n => !ids.has(n.id));
+
+  return res.json({ success: true, deletedCount: toDelete.length });
 });
 
-apiRouter.patch('/notifications/:id/read', async (req, res) => {
-  const notif = memStore.notifications.find(n => n.id === req.params.id);
-  if (notif) {
-    notif.isRead = true;
-    await dbMarkNotificationRead(req.params.id);
+// Reading an individual notification permanently deletes it.
+apiRouter.delete('/notifications/:id', async (req, res) => {
+  await ensureDbReady();
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'يجب تسجيل الدخول أولاً' });
   }
-  res.json({ success: true });
+
+  const notif = memStore.notifications.find(n => n.id === req.params.id);
+  if (!notif) {
+    return res.json({ success: true, deleted: false });
+  }
+
+  const allowed = user.role === 'ADMIN'
+    ? notif.userId === 'all_admin' || notif.userId === user.id
+    : notif.userId === user.id;
+
+  if (!allowed) {
+    return res.status(403).json({ success: false, error: 'غير مصرح بحذف هذا الإشعار' });
+  }
+
+  memStore.notifications = memStore.notifications.filter(n => n.id !== notif.id);
+  await dbDeleteNotification(notif.id);
+
+  return res.json({ success: true, deleted: true, id: notif.id });
+});
+
+// Backward-compatible endpoint: reading means permanent deletion.
+apiRouter.patch('/notifications/:id/read', async (req, res) => {
+  await ensureDbReady();
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'يجب تسجيل الدخول أولاً' });
+  }
+
+  const notif = memStore.notifications.find(n => n.id === req.params.id);
+  if (!notif) {
+    return res.json({ success: true, deleted: false });
+  }
+
+  const allowed = user.role === 'ADMIN'
+    ? notif.userId === 'all_admin' || notif.userId === user.id
+    : notif.userId === user.id;
+
+  if (!allowed) {
+    return res.status(403).json({ success: false, error: 'غير مصرح بحذف هذا الإشعار' });
+  }
+
+  memStore.notifications = memStore.notifications.filter(n => n.id !== notif.id);
+  await dbDeleteNotification(notif.id);
+
+  return res.json({ success: true, deleted: true, id: notif.id });
 });
 
 // 5. Admin Protected API Endpoints (/api/admin/*)
