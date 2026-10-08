@@ -182,7 +182,7 @@ function MainApp() {
   }, [user]);
 
   // Central Navigation handler with Role Guard
-  const navigate = (tab: string) => {
+  const navigate = (tab: string, authenticatedUser?: User | null) => {
     if (tab === 'admin-login') {
       setCurrentTab('admin-login');
       if (window.location.pathname !== '/admin/login') {
@@ -194,7 +194,7 @@ function MainApp() {
 
     // Strict Guard for /admin and all admin routes
     if (tab === 'admin') {
-      const currentUser = user || (() => {
+      const currentUser = authenticatedUser || user || (() => {
         try {
           const cached = localStorage.getItem('rdn_current_user');
           return cached ? JSON.parse(cached) : null;
@@ -455,9 +455,9 @@ function MainApp() {
           // CUSTOMER -> redirected to customer account
           // ADMIN -> redirected to admin dashboard
           if (authenticatedUser.role === 'ADMIN') {
-            navigate('admin');
+            navigate('admin', authenticatedUser);
           } else {
-            navigate('account');
+            navigate('account', authenticatedUser);
           }
         }}
       />
