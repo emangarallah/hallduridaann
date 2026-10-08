@@ -32,7 +32,6 @@ const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, ope
   const { user, isAdmin, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [badgeDismissedLocally, setBadgeDismissedLocally] = useState(false);
 
   // TanStack Query with staleTime (5 mins) for shared cached hall settings
   const { data: settings } = useHallSettingsQuery();
@@ -41,26 +40,18 @@ const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, ope
   const { data: notifications = [] } = useNotificationsQuery(user?.id, isAdmin);
   const markReadMutation = useMarkNotificationReadOptimisticMutation();
 
-  const unreadCount = badgeDismissedLocally ? 0 : notifications.filter(n => !n.isRead).length;
+  const unreadCount = notifications.length;
 
   const handleToggleNotifications = useCallback(() => {
-    setNotificationsOpen(prev => {
-      const next = !prev;
-      if (next) {
-        // Optimistic State Update: immediately zero out badge counter on clicking the bell icon
-        setBadgeDismissedLocally(true);
-      }
-      return next;
-    });
+    setNotificationsOpen(prev => !prev);
   }, []);
 
   const handleNotificationClick = useCallback((notif: AppNotification) => {
-    // 1. Instantly update React Query Cache with onMutate (zeroes badge & dismisses in 0ms)
-    setBadgeDismissedLocally(true);
+    // Reading an alert permanently deletes it from the server and local cache.
     markReadMutation.mutate(notif.id);
     setNotificationsOpen(false);
 
-    // 2. Navigate immediately
+    // Navigate immediately
     if (isAdmin) {
       setCurrentTab('admin');
     } else {
@@ -233,7 +224,7 @@ const NavbarComponent: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, ope
                             key={notif.id}
                             onClick={() => handleNotificationClick(notif)}
                             className={`p-3 cursor-pointer transition-colors hover:bg-[#1a2133] ${
-                              !notif.isRead ? 'bg-amber-500/5' : ''
+                              'bg-amber-500/5'
                             }`}
                           >
                             <div className="flex items-start justify-between gap-2">
