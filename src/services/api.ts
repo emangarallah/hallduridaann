@@ -687,10 +687,16 @@ export async function addNotification(data: Omit<AppNotification, 'id' | 'isRead
 
 export async function markNotificationRead(id: string): Promise<void> {
   // "Read" now means permanent deletion from Neon and local cache.
+  const res = await fetchApi(`/api/notifications/${id}`, { method: 'DELETE' });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error?.error || 'فشل حذف الإشعار نهائياً');
+  }
+
+  // Persist the dismissal only after the server confirms permanent deletion.
   dismissNotificationId(id);
-  try {
-    await fetchApi(`/api/notifications/${id}`, { method: 'DELETE' });
-  } catch {}
+
   const list = getLocal<AppNotification[]>(NOTIFICATIONS_KEY, []);
   setLocal(NOTIFICATIONS_KEY, list.filter(n => n.id !== id && !n.isRead));
 }
