@@ -89,8 +89,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const isSubmitting = loginSubmitting || loginMutation.isPending || registerSubmitting || registerMutation.isPending;
 
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleLoginSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault();
 
     // Lock immediately on the first click. React state updates are asynchronous,
     // so the ref prevents duplicate login requests during the same event loop tick.
@@ -386,8 +386,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="submit"
+              onClick={(e) => {
+                // Explicit click handler makes the first physical tap submit immediately.
+                // The ref lock inside handleLoginSubmit prevents the native form submit
+                // from sending a second request.
+                void handleLoginSubmit(e);
+              }}
               disabled={isSubmitting}
-              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer"
+              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer touch-manipulation"
             >
               {loginSubmitting || loginMutation.isPending ? 'جاري التحقق وتسجيل الدخول...' : 'تسجيل الدخول'}
             </button>
