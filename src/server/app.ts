@@ -420,22 +420,23 @@ apiRouter.post('/auth/register', async (req, res) => {
       throw dbErr;
     }
 
-    // Update in-memory session cache
-    memStore.users.push(newUser);
-    const token = signAuthToken(newUser);
-    memStore.sessions.set(token, newUser.id);
-    memStore.sessions.set(`token_${newUser.id}`, newUser.id);
+    // Keep the customer in the server cache.
+    // Registration intentionally does not create a login session;
+    // the frontend redirects the customer to the Login form.
+    const existingIndex = memStore.users.findIndex(u => u.id === newUser.id);
+    if (existingIndex >= 0) {
+      memStore.users[existingIndex] = newUser;
+    } else {
+      memStore.users.push(newUser);
+    }
 
-    // Set auth cookie
-    res.setHeader('Set-Cookie', `rdn_auth_token=${token}; Path=/; SameSite=Lax; Max-Age=604800`);
-
-    // Return user without password
+    // Return user without password.
     const { password: _, ...userSafe } = newUser;
     res.status(201).json({
       success: true,
       message: 'تم إنشاء الحساب بنجاح',
       user: userSafe,
-      token
+      redirectToLogin: true
     });
   } catch (err: any) {
     console.error('[Register API Error]', err);
