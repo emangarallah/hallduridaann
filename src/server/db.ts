@@ -1004,6 +1004,16 @@ export async function dbMarkNotificationRead(id: string) {
   }
 }
 
+export async function dbDeleteNotification(id: string): Promise<void> {
+  if (pgPool && isPgConnected) {
+    try {
+      await pgPool.query('DELETE FROM notifications WHERE id = $1', [id]);
+    } catch (e: any) {
+      console.warn('[DB Error] Failed to delete notification from PG:', e.message);
+    }
+  }
+}
+
 // Database Status & Diagnostics
 export async function getDatabaseStatus() {
   if (pgPool) {
