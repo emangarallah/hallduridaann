@@ -28,7 +28,6 @@ import {
   dbUpdateReviewStatus,
   dbDeleteReview,
   dbSaveNotification,
-  dbMarkNotificationRead,
   dbDeleteNotification
 } from './db.ts';
 import type {
