@@ -87,7 +87,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  const isSubmitting = loginSubmitting || loginMutation.isPending || registerSubmitting || registerMutation.isPending;
+  const isLoginSubmitting = loginSubmitting || loginMutation.isPending;
+  const isRegisterSubmitting = registerSubmitting || registerMutation.isPending;
 
   const handleLoginSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
     e?.preventDefault();
@@ -386,13 +387,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="submit"
-              onClick={(e) => {
-                // Explicit click handler makes the first physical tap submit immediately.
-                // The ref lock inside handleLoginSubmit prevents the native form submit
-                // from sending a second request.
-                void handleLoginSubmit(e);
-              }}
-              disabled={isSubmitting}
+              disabled={isLoginSubmitting}
               className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer touch-manipulation"
             >
               {loginSubmitting || loginMutation.isPending ? 'جاري التحقق وتسجيل الدخول...' : 'تسجيل الدخول'}
@@ -518,7 +513,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isRegisterSubmitting}
               className="w-full mt-2 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm shadow-lg shadow-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer"
             >
               {registerSubmitting || registerMutation.isPending ? 'جاري إنشاء الحساب...' : 'تأكيد وإنشاء الحساب'}
